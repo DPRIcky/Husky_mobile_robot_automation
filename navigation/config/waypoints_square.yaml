@@ -1,0 +1,23 @@
+# Example Waypoints for Square Pattern
+# Coordinates are in map frame (meters)
+
+waypoints:
+  - x: 0.0
+    y: 0.0
+    yaw: 0.0
+    
+  - x: 5.0
+    y: 0.0
+    yaw: 1.5708  # 90 degrees
+    
+  - x: 5.0
+    y: 5.0
+    yaw: 3.14159  # 180 degrees
+    
+  - x: 0.0
+    y: 5.0
+    yaw: -1.5708  # -90 degrees (or 270)
+    
+  - x: 0.0
+    y: 0.0
+    yaw: 0.0  # Return to start

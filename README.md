@@ -19,6 +19,12 @@ This repository contains a complete robotics system for the Clearpath A300 outdo
 │   ├── sensor_fusion_pf.py    # Particle Filter implementation
 │   ├── compare_filters.py     # Filter comparison tool
 │   └── config/                # Configuration files
+├── navigation/                # Autonomous navigation (NEW!)
+│   ├── config/                # Nav2 params, waypoints, localization
+│   ├── launch/                # Navigation launch files
+│   ├── scripts/               # Waypoint navigator node
+│   ├── README.md              # Navigation documentation
+│   └── start_navigation.sh    # Quick start script
 ├── sensors/                   # Sensor configurations and launch files
 │   ├── config/                # Camera, GPS, IMU, Lidar configs
 │   └── launch/                # Individual sensor launch files
@@ -30,7 +36,8 @@ This repository contains a complete robotics system for the Clearpath A300 outdo
 │   └── launch/                # Manipulator launch files
 ├── robot.urdf.xacro          # Robot description
 ├── robot.srdf                # Semantic robot description
-└── SYSTEM_OVERVIEW.md        # Detailed system documentation
+├── SYSTEM_OVERVIEW.md        # Detailed system documentation
+└── notes.md                  # Engineering log and iteration notes
 
 ```
 
@@ -70,6 +77,37 @@ ros2 launch sensors/launch/gps_0.launch.py
 ros2 launch sensors/launch/lidar2d_0.launch.py
 ```
 
+### Autonomous Navigation (NEW!)
+
+**Quick Start - Everything in one command:**
+```bash
+./navigation/start_navigation.sh
+```
+
+**Manual Start:**
+```bash
+# Terminal 1: Simulation
+ros2 launch clearpath_gz simulation.launch.py setup_path:=/home/prajjwal/clearpath
+
+# Terminal 2: SLAM
+ros2 launch clearpath_nav2_demos slam.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
+
+# Terminal 3: Nav2
+ros2 launch clearpath_nav2_demos nav2.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
+
+# Terminal 4: RViz
+ros2 launch clearpath_viz view_navigation.launch.py namespace:=/a300_00000 use_sim_time:=true
+
+# Terminal 5: Waypoint Navigation
+python3 navigation/scripts/waypoint_navigator.py \
+    --ros-args \
+    -p waypoints_file:=/home/prajjwal/clearpath/navigation/config/waypoints_square.yaml \
+    -p mode:=loop \
+    -p use_sim_time:=true
+```
+
+See [navigation/README.md](navigation/README.md) for detailed documentation.
+
 ## 🔬 State Estimation System
 
 This repository includes three different sensor fusion implementations:
@@ -108,6 +146,10 @@ python3 state_estimation/compare_filters.py
 - ✅ Configurable through YAML files
 - ✅ ROS 2 native implementation
 - ✅ Modular and extensible architecture
+- ✅ **Autonomous navigation with Nav2**
+- ✅ **Waypoint-based mission planning**
+- ✅ **Obstacle avoidance (LiDAR + Depth Camera)**
+- ✅ **Multiple navigation modes (single, loop, patrol)**
 
 ## 🛠️ Robot Specifications
 

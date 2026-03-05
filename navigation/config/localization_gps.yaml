@@ -1,0 +1,99 @@
+# Extended Localization Configuration with GPS Integration
+# Includes dual EKF setup and navsat_transform for GPS→map conversion
+
+a300_00000:
+  # Local EKF (odom frame) - fuses wheel odometry and IMU
+  ekf_local_node:
+    ros__parameters:
+      use_sim_time: True
+      frequency: 50.0
+      two_d_mode: True
+      publish_tf: True
+      
+      # Frames
+      map_frame: map
+      odom_frame: odom
+      base_link_frame: base_link
+      world_frame: odom
+      
+      # Sensors
+      odom0: platform/odom
+      odom0_config: [True, True, False,   # x, y, z position
+                     False, False, True,  # roll, pitch, yaw
+                     True, True, False,   # x_vel, y_vel, z_vel
+                     False, False, True,  # roll_vel, pitch_vel, yaw_vel
+                     False, False, False] # x_accel, y_accel, z_accel
+      odom0_differential: False
+      odom0_queue_size: 10
+      odom0_relative: False
+      
+      imu0: sensors/imu_0/data
+      imu0_config: [False, False, False,  # x, y, z position
+                    False, False, False,  # roll, pitch, yaw (use orientation from odom)
+                    False, False, False,  # x_vel, y_vel, z_vel
+                    False, False, True,   # roll_vel, pitch_vel, yaw_vel
+                    True, True, False]    # x_accel, y_accel, z_accel
+      imu0_differential: False
+      imu0_queue_size: 10
+      imu0_remove_gravitational_acceleration: True
+      
+      # Diagnostics
+      print_diagnostics: True
+      
+  # Global EKF (map frame) - fuses local estimate with GPS
+  ekf_global_node:
+    ros__parameters:
+      use_sim_time: True
+      frequency: 50.0
+      two_d_mode: True
+      publish_tf: True
+      
+      # Frames
+      map_frame: map
+      odom_frame: odom
+      base_link_frame: base_link
+      world_frame: map
+      
+      # Sensors
+      odom0: odometry/local  # Output from local EKF
+      odom0_config: [True, True, False,   # x, y, z position
+                     False, False, True,  # roll, pitch, yaw
+                     True, True, False,   # x_vel, y_vel, z_vel
+                     False, False, True,  # roll_vel, pitch_vel, yaw_vel
+                     False, False, False] # x_accel, y_accel, z_accel
+      odom0_differential: False
+      odom0_queue_size: 10
+      
+      # GPS-derived odometry from navsat_transform
+      odom1: odometry/gps
+      odom1_config: [True, True, False,   # x, y, z position (GPS provides position)
+                     False, False, False,  # roll, pitch, yaw
+                     False, False, False,  # velocities
+                     False, False, False,  # angular velocities
+                     False, False, False] # accelerations
+      odom1_differential: False
+      odom1_queue_size: 10
+      
+      # Diagnostics
+      print_diagnostics: True
+      
+  # NavSat Transform - converts GPS lat/lon to map x/y
+  navsat_transform_node:
+    ros__parameters:
+      use_sim_time: True
+      frequency: 10.0
+      delay: 3.0
+      
+      # Input/Output topics
+      magnetic_declination_radians: 0.0  # Set based on your location
+      yaw_offset: 0.0
+      zero_altitude: True
+      broadcast_utm_transform: False
+      broadcast_utm_transform_as_parent_frame: False
+      publish_filtered_gps: True
+      use_odometry_yaw: True
+      wait_for_datum: False
+      
+      # Frames
+      world_frame: map
+      base_link_frame: base_link

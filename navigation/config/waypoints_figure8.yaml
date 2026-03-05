@@ -1,0 +1,44 @@
+# Example Waypoints for Figure-8 Pattern
+# Coordinates are in map frame (meters)
+
+waypoints:
+  # Start
+  - x: 0.0
+    y: 0.0
+    yaw: 0.0
+    
+  # First circle
+  - x: 2.0
+    y: 2.0
+    yaw: 0.785  # 45 degrees
+    
+  - x: 4.0
+    y: 0.0
+    yaw: 0.0
+    
+  - x: 2.0
+    y: -2.0
+    yaw: -0.785  # -45 degrees
+    
+  # Center crossing
+  - x: 0.0
+    y: 0.0
+    yaw: 3.14159  # 180 degrees
+    
+  # Second circle
+  - x: -2.0
+    y: -2.0
+    yaw: -2.356  # -135 degrees
+    
+  - x: -4.0
+    y: 0.0
+    yaw: 3.14159  # 180 degrees
+    
+  - x: -2.0
+    y: 2.0
+    yaw: 2.356  # 135 degrees
+    
+  # Return to start
+  - x: 0.0
+    y: 0.0
+    yaw: 0.0
