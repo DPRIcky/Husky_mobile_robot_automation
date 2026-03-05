@@ -1,0 +1,151 @@
+╔════════════════════════════════════════════════════════════════════╗
+║                    QUICK START GUIDE                               ║
+║              State Estimation System - Fixed!                      ║
+╚════════════════════════════════════════════════════════════════════╝
+
+✅ ALL DEPENDENCIES NOW INSTALLED
+═══════════════════════════════════════════════════════════════════════
+✓ transforms3d installed
+✓ numpy installed
+✓ matplotlib installed
+✓ All import warnings fixed
+
+
+🚀 RUN IT NOW - 3 EASY STEPS
+═══════════════════════════════════════════════════════════════════════
+
+STEP 1: Open a terminal and run:
+────────────────────────────────────────────────────────────────────────
+cd /home/prajjwal/clearpath
+./state_estimation/run_test.sh
+
+
+STEP 2: Select option [1] for MOCK SENSORS test
+────────────────────────────────────────────────────────────────────────
+This is the easiest way to see it working!
+No robot or simulation needed.
+
+
+STEP 3: Watch the magic happen!
+────────────────────────────────────────────────────────────────────────
+You'll see:
+  • Terminal output showing filter is running
+  • A matplotlib window with 6 LIVE PLOTS
+  • Smooth circular motion being tracked
+  • Uncertainty decreasing then stabilizing
+
+
+📊 WHAT YOU'LL SEE IN THE MATPLOTLIB WINDOW
+═══════════════════════════════════════════════════════════════════════
+
+6 Real-time Plots (Updates every 100ms):
+
+┌─────────────────┬─────────────────┐
+│  1. Circle      │  2. Sin Waves   │  ← Top row
+│     ⭕ Path     │     ~ ~ ~ ~     │
+├─────────────────┼─────────────────┤
+│  3. Angle       │  4. Velocity    │  ← Middle row
+│     ↗ Rising    │     ~ ~ ~ ~     │
+├─────────────────┼─────────────────┤
+│  5. AngVel      │  6. Uncertainty │  ← Bottom row
+│     ─── Flat    │     ╲__ Low     │
+└─────────────────┴─────────────────┘
+
+
+⏱️  TIMELINE (What Happens When)
+═══════════════════════════════════════════════════════════════════════
+
+0-2 sec:   Filter initializing (uncertainty HIGH - this is normal!)
+2-5 sec:   Filter converging (uncertainty dropping fast)
+5+ sec:    Smooth, accurate estimates (uncertainty LOW and stable)
+12 sec:    One complete circle - pattern repeats
+
+Let it run for 30+ seconds to see steady behavior!
+
+
+🎯 EXPECTED BEHAVIOR
+═══════════════════════════════════════════════════════════════════════
+
+✓ GOOD Signs:
+  • Smooth circular path (5m radius)
+  • Clean sine/cosine waves
+  • Constant angular velocity (~0.5 rad/s)
+  • Uncertainty decreases then stays low
+  • No drift (circle centered at origin)
+
+✗ BAD Signs:
+  • Jerky, broken lines
+  • Spiral pattern (drift)
+  • Growing uncertainty
+  • Large spikes
+  • Filter divergence
+
+
+⏹️  HOW TO STOP
+═══════════════════════════════════════════════════════════════════════
+
+Just press Ctrl+C in the terminal
+The script will clean up all processes automatically
+
+
+🔄 USING WITH REAL ROBOT/SIMULATION
+═══════════════════════════════════════════════════════════════════════
+
+Once you've tested with mock sensors:
+
+OPTION 1: Interactive script
+  ./state_estimation/run_test.sh
+  Select option [2] for REAL SENSORS
+
+OPTION 2: Manual (better control)
+  Terminal 1: python3 state_estimation/sensor_fusion_ekf.py
+  Terminal 2: python3 state_estimation/visualize_state.py
+  
+Then drive your robot and watch it track!
+
+
+📊 MONITORING WITH ROS2 (Optional)
+═══════════════════════════════════════════════════════════════════════
+
+In another terminal, check the topics:
+
+  ros2 topic list | grep state_estimate
+  ros2 topic echo /state_estimate/pose
+  ros2 topic hz /state_estimate/odom  # Should show ~50 Hz
+
+
+🔧 IF SOMETHING GOES WRONG
+═══════════════════════════════════════════════════════════════════════
+
+Dependencies missing?
+  → Run: python3 -m pip install --break-system-packages transforms3d numpy matplotlib
+
+Plots not appearing?
+  → Check $DISPLAY is set: echo $DISPLAY
+  → If SSH: use ssh -X for X11 forwarding
+
+Filter diverging?
+  → Stop (Ctrl+C) and restart
+  → This usually fixes temporary glitches
+
+
+💡 PRO TIP
+═══════════════════════════════════════════════════════════════════════
+
+Start with MOCK sensors (option 1) to verify everything works.
+Once you see the beautiful circular motion and smooth plots,
+you'll know the filter is working perfectly!
+
+Then move to REAL sensors to track your actual robot.
+
+
+═══════════════════════════════════════════════════════════════════════
+
+🎉 READY TO GO!
+
+Just run: ./state_estimation/run_test.sh
+
+═══════════════════════════════════════════════════════════════════════
+
+Need more details? See: state_estimation/HOW_TO_RUN.txt
+Full documentation: state_estimation/README.md

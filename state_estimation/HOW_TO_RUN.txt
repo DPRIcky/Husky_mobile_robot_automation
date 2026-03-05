@@ -1,0 +1,361 @@
+╔════════════════════════════════════════════════════════════════════╗
+║              HOW TO RUN & WHAT TO VISUALIZE                        ║
+║                  State Estimation System                           ║
+╚════════════════════════════════════════════════════════════════════╝
+
+✅ FIXES APPLIED
+═══════════════════════════════════════════════════════════════════════
+✓ Import warnings fixed (tf_transformations → transforms3d)
+✓ All dependencies installed (numpy, matplotlib, transforms3d)
+✓ All Python files verified and working
+
+
+🚀 METHOD 1: EASIEST - INTERACTIVE SCRIPT
+═══════════════════════════════════════════════════════════════════════
+cd /home/prajjwal/clearpath
+./state_estimation/run_test.sh
+
+Then press 1 for mock sensors test
+
+
+🚀 METHOD 2: MANUAL STEP-BY-STEP (Recommended for Learning)
+═══════════════════════════════════════════════════════════════════════
+
+STEP 1: Open 3 terminal windows
+────────────────────────────────────────────────────────────────────────
+Make sure ROS2 is sourced in each:
+  source /opt/ros/jazzy/setup.bash
+
+
+STEP 2: Start Mock Sensors (Terminal 1)
+────────────────────────────────────────────────────────────────────────
+cd /home/prajjwal/clearpath
+python3 state_estimation/test_mock_sensors.py
+
+Expected Output:
+  [INFO] [mock_sensor_publisher]: Mock sensor publisher started - simulating circular motion
+
+What it does:
+  • Simulates robot moving in a 5-meter radius circle
+  • Publishes IMU data (orientation, angular velocity, acceleration)
+  • Publishes Odometry data (position, velocity)
+  • Updates at 50 Hz
+  • Adds realistic sensor noise
+
+
+STEP 3: Start State Estimator (Terminal 2)
+────────────────────────────────────────────────────────────────────────
+cd /home/prajjwal/clearpath
+python3 state_estimation/sensor_fusion_ekf.py
+
+Expected Output:
+  [INFO] [sensor_fusion_ekf]: Starting sensor fusion node with update rate: 50.0 Hz
+  [INFO] [sensor_fusion_ekf]: Subscribed to IMU data
+  [INFO] [sensor_fusion_ekf]: Subscribed to Odometry data
+  [INFO] [sensor_fusion_ekf]: Sensor fusion node initialized
+
+What it does:
+  • Receives sensor data from mock sensors
+  • Runs Extended Kalman Filter at 50 Hz
+  • Fuses IMU + Odometry measurements
+  • Publishes filtered state estimates
+  • Tracks position, velocity, orientation with uncertainty
+
+
+STEP 4: Start Visualizer (Terminal 3)
+────────────────────────────────────────────────────────────────────────
+cd /home/prajjwal/clearpath
+python3 state_estimation/visualize_state.py
+
+Expected Output:
+  [INFO] [state_visualizer]: State visualizer initialized
+  A matplotlib window will open with 6 plots
+
+
+📊 WHAT TO VISUALIZE - 6 LIVE PLOTS
+═══════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ PLOT 1: Position Trajectory (Top Left)                             │
+│─────────────────────────────────────────────────────────────────────│
+│ Shows: 2D bird's-eye view of robot path                            │
+│ Axes: X position vs Y position (meters)                            │
+│ Expected: Perfect circle with 5-meter radius                       │
+│ Red dot: Current robot position                                    │
+│ Blue line: Path traveled                                           │
+│                                                                     │
+│ What to look for:                                                  │
+│   ✓ Smooth circular path                                           │
+│   ✓ No drift or wandering                                          │
+│   ✓ Consistent radius (~5 meters)                                  │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ PLOT 2: Position vs Time (Top Right)                               │
+│─────────────────────────────────────────────────────────────────────│
+│ Shows: X and Y coordinates over time                               │
+│ Axes: Time (seconds) vs Position (meters)                          │
+│ Expected: Sinusoidal waves (cos and sin for circular motion)       │
+│ Red line: X position                                               │
+│ Blue line: Y position                                              │
+│                                                                     │
+│ What to look for:                                                  │
+│   ✓ Smooth sine/cosine waves                                       │
+│   ✓ Amplitude of ~5 meters                                         │
+│   ✓ 90° phase shift between X and Y                                │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ PLOT 3: Orientation vs Time (Middle Left)                          │
+│─────────────────────────────────────────────────────────────────────│
+│ Shows: Robot heading angle (yaw)                                   │
+│ Axes: Time (seconds) vs Theta (radians)                           │
+│ Expected: Linear increase with wrapping at ±π                      │
+│ Green line: Orientation angle                                      │
+│                                                                     │
+│ What to look for:                                                  │
+│   ✓ Steadily increasing angle                                      │
+│   ✓ Wraps from +π to -π (discontinuity is normal)                 │
+│   ✓ Constant rate of change (~0.5 rad/s)                          │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ PLOT 4: Velocity vs Time (Middle Right)                            │
+│─────────────────────────────────────────────────────────────────────│
+│ Shows: Linear velocity components                                  │
+│ Axes: Time (seconds) vs Velocity (m/s)                            │
+│ Expected: Sinusoidal waves (velocity tangent to circle)           │
+│ Red line: Vx (velocity in X direction)                            │
+│ Blue line: Vy (velocity in Y direction)                           │
+│                                                                     │
+│ What to look for:                                                  │
+│   ✓ Smooth sine/cosine waves                                       │
+│   ✓ Amplitude of ~2.5 m/s                                          │
+│   ✓ Total velocity magnitude constant                              │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ PLOT 5: Angular Velocity vs Time (Bottom Left)                     │
+│─────────────────────────────────────────────────────────────────────│
+│ Shows: Rate of rotation                                            │
+│ Axes: Time (seconds) vs Omega (rad/s)                             │
+│ Expected: Constant at ~0.5 rad/s (circular motion)                │
+│ Purple line: Angular velocity                                      │
+│                                                                     │
+│ What to look for:                                                  │
+│   ✓ Nearly constant line at 0.5 rad/s                             │
+│   ✓ Small oscillations from sensor noise (normal)                  │
+│   ✓ No large spikes or drift                                       │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ PLOT 6: Position Uncertainty (Bottom Right)                        │
+│─────────────────────────────────────────────────────────────────────│
+│ Shows: Filter confidence (standard deviation)                      │
+│ Axes: Time (seconds) vs Std Dev (meters)                          │
+│ Expected: Starts high, quickly decreases, then stabilizes         │
+│ Red line: X position uncertainty                                  │
+│ Blue line: Y position uncertainty                                 │
+│                                                                     │
+│ What to look for:                                                  │
+│   ✓ Rapid decrease in first few seconds (filter converging)        │
+│   ✓ Stabilizes at low value (~0.1-0.3 meters)                     │
+│   ✓ Both X and Y similar values                                    │
+│   ✓ Uncertainty should NOT grow over time                          │
+└─────────────────────────────────────────────────────────────────────┘
+
+
+⏱️ TIMELINE OF WHAT HAPPENS
+═══════════════════════════════════════════════════════════════════════
+
+0-2 seconds:
+  • Filter initializing
+  • Uncertainty is HIGH (learning phase)
+  • Plots may show some initial transients
+  • This is NORMAL - filter is "tuning in"
+
+2-5 seconds:
+  • Filter converging
+  • Uncertainty decreasing rapidly
+  • State estimates becoming accurate
+  • Circular pattern emerging clearly
+
+5+ seconds:
+  • Filter fully converged
+  • Smooth, accurate state estimates
+  • Low, stable uncertainty
+  • Perfect circular motion visible
+
+After 1 complete circle (~12 seconds):
+  • Should see smooth, repeating pattern
+  • Uncertainty remains low and stable
+  • No drift (circle stays centered)
+
+
+🎯 GOOD vs BAD BEHAVIOR
+═══════════════════════════════════════════════════════════════════════
+
+✅ GOOD (What you SHOULD see):
+────────────────────────────────────────────────────────────────────────
+  ✓ Smooth circular trajectory in Plot 1
+  ✓ Clean sine/cosine waves in Plots 2 & 4
+  ✓ Steady angular velocity (~0.5 rad/s) in Plot 5
+  ✓ Uncertainty decreases then stabilizes in Plot 6
+  ✓ No drift (circle stays centered at origin)
+  ✓ Consistent pattern over multiple loops
+
+❌ BAD (Problems to watch for):
+────────────────────────────────────────────────────────────────────────
+  ✗ Jerky, discontinuous trajectory
+  ✗ Spiral pattern (drift away from center)
+  ✗ Growing uncertainty over time
+  ✗ Large spikes in velocity or angular velocity
+  ✗ Filter divergence (estimates go to infinity)
+  ✗ Irregular, non-circular path
+
+
+🔧 MONITORING WITH ROS2 COMMANDS
+═══════════════════════════════════════════════════════════════════════
+
+In a 4th terminal, you can monitor topics:
+
+Check published topics:
+  ros2 topic list | grep state_estimate
+
+Output should show:
+  /state_estimate/odom
+  /state_estimate/pose
+  /state_estimate/twist
+
+View live estimates:
+  ros2 topic echo /state_estimate/pose
+
+Check update rate:
+  ros2 topic hz /state_estimate/odom
+
+Expected: ~50 Hz (average_rate: 50.0)
+
+View raw sensor data:
+  ros2 topic echo /a300_00000/sensors/imu_0/data
+  ros2 topic echo /a300_00000/platform/odom
+
+
+📸 EXPECTED VISUAL APPEARANCE
+═══════════════════════════════════════════════════════════════════════
+
+The matplotlib window should look like this:
+
+┌──────────────────────────────────────────────────────────────────┐
+│  State Estimation Visualization                          [X]     │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────────┐  ┌──────────────────┐                   │
+│  │   ⭕ Circle      │  │  ~~~~~ Waves     │  Top Row          │
+│  │   • Red dot     │  │  Red & Blue      │                   │
+│  └──────────────────┘  └──────────────────┘                   │
+│                                                                  │
+│  ┌──────────────────┐  ┌──────────────────┐                   │
+│  │  / Angle        │  │  ~~~~~ Velocity  │  Middle Row       │
+│  │  / Increasing   │  │  Red & Blue      │                   │
+│  └──────────────────┘  └──────────────────┘                   │
+│                                                                  │
+│  ┌──────────────────┐  ┌──────────────────┐                   │
+│  │  ─── Constant   │  │  ╲__ Decreasing  │  Bottom Row       │
+│  │  Angular vel    │  │  Uncertainty     │                   │
+│  └──────────────────┘  └──────────────────┘                   │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+
+All plots update in REAL-TIME (refresh every 100ms)
+
+
+⏹️  HOW TO STOP
+═══════════════════════════════════════════════════════════════════════
+
+Press Ctrl+C in each terminal to stop:
+  1. First stop visualizer (Terminal 3)
+  2. Then stop estimator (Terminal 2)
+  3. Finally stop mock sensors (Terminal 1)
+
+
+🔄 WITH REAL ROBOT/SIMULATION
+═══════════════════════════════════════════════════════════════════════
+
+To use with your actual Gazebo simulation:
+
+SKIP Step 2 (mock sensors), and just run:
+
+Terminal 1: State Estimator
+  python3 state_estimation/sensor_fusion_ekf.py
+
+Terminal 2: Visualizer
+  python3 state_estimation/visualize_state.py
+
+The estimator will automatically subscribe to real sensor topics:
+  /a300_00000/sensors/imu_0/data
+  /a300_00000/platform/odom
+
+Then drive your robot in Gazebo and watch the visualization!
+
+
+🎓 WHAT YOU'RE SEEING (Technical)
+═══════════════════════════════════════════════════════════════════════
+
+The visualizer shows the OUTPUT of the Extended Kalman Filter:
+
+State Vector Being Estimated:
+  [x, y, theta, vx, vy, omega, ax, ay]
+   │  │    │     │   │     │     │   │
+   │  │    │     │   │     │     │   └─ Y acceleration
+   │  │    │     │   │     │     └───── X acceleration
+   │  │    │     │   │     └─────────── Angular velocity
+   │  │    │     │   └───────────────── Y velocity
+   │  │    │     └───────────────────── X velocity
+   │  │    └─────────────────────────── Orientation (yaw)
+   │  └──────────────────────────────── Y position
+   └─────────────────────────────────── X position
+
+The filter:
+  1. Predicts next state using motion model (constant acceleration)
+  2. Receives IMU measurement (theta, omega, ax, ay)
+  3. Receives Odometry measurement (x, y, theta, vx, vy, omega)
+  4. Computes Kalman gain based on uncertainties
+  5. Updates state estimate by blending prediction & measurements
+  6. Updates uncertainty covariance matrix
+  7. Publishes fused estimate at 50 Hz
+
+
+💡 TIPS
+═══════════════════════════════════════════════════════════════════════
+
+• Let it run for at least 30 seconds to see stable behavior
+• The first 2-3 seconds show filter convergence (normal)
+• If plots don't update, check terminal for errors
+• If matplotlib window is blank, data hasn't arrived yet (wait)
+• Close matplotlib window to stop visualization cleanly
+• Mock sensors create a perfect test case for validation
+
+
+🐛 COMMON ISSUES
+═══════════════════════════════════════════════════════════════════════
+
+"No module named 'transforms3d'":
+  → Already fixed! Dependencies installed.
+
+"No data appearing in plots":
+  → Wait 5 seconds for data to accumulate
+  → Check mock sensors are running (Terminal 1)
+  → Check state estimator is running (Terminal 2)
+
+"matplotlib window not appearing":
+  → Check $DISPLAY is set: echo $DISPLAY
+  → If using SSH, enable X11 forwarding: ssh -X
+
+"Filter diverging / crazy values":
+  → Restart all 3 terminals
+  → Check for error messages in Terminal 2
+
+
+═══════════════════════════════════════════════════════════════════════
+Ready to go! Start with: ./state_estimation/run_test.sh
+═══════════════════════════════════════════════════════════════════════

@@ -1,0 +1,51 @@
+/**:
+  ros__parameters:
+    # Update rate for the filter (Hz)
+    update_rate: 50.0
+    
+    # Enable/disable specific sensors
+    use_imu: true
+    use_odometry: true
+    use_gps: true  
+    use_lidar: true
+    
+    # Robot namespace
+    robot_namespace: 'a300_00000'
+    
+    # Frame IDs
+    odom_frame: 'odom'
+    base_link_frame: 'base_link'
+    world_frame: 'odom'
+    
+    # EKF parameters
+    ekf:
+      # Initial state covariance
+      initial_state_covariance: 1.0
+      
+      # Process noise covariance multipliers
+      process_noise:
+        position: 0.01
+        orientation: 0.01
+        velocity: 0.01
+        acceleration: 0.1
+      
+      # Measurement noise covariance for IMU
+      imu_noise:
+        orientation: 0.01
+        angular_velocity: 0.01
+        linear_acceleration: 0.1
+      
+      # Measurement noise covariance for odometry
+      odom_noise:
+        position: 0.1
+        orientation: 0.05
+        velocity: 0.1
+      
+      # Measurement noise covariance for GPS
+      gps_noise:
+        position: 1.0
+      
+      # Measurement noise covariance for LIDAR scan matching
+      lidar_noise:
+        position: 0.05
+        orientation: 0.02
