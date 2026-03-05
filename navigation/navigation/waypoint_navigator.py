@@ -285,11 +285,13 @@ class WaypointNavigator(Node):
             # Wait before next waypoint
             if self.wait_duration > 0:
                 self.get_logger().info(f'Waiting {self.wait_duration}s at waypoint...')
-                self.create_timer(
-                    self.wait_duration,
-                    self.send_next_waypoint,
-                    oneshot=True
-                )
+                # Create one-shot timer
+                timer = self.create_timer(self.wait_duration, lambda: None)
+                def timer_callback():
+                    timer.cancel()
+                    self.send_next_waypoint()
+                timer.timer_callback_added = False
+                timer._callback = timer_callback
             else:
                 self.send_next_waypoint()
         else:
