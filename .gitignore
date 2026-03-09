@@ -24,6 +24,8 @@ wheels/
 devel/
 logs/
 build/
+install/
+log/
 bin/
 msg_gen/
 srv_gen/

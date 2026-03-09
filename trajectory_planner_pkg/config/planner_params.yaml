@@ -1,0 +1,13 @@
+# trajectory_planner_pkg default parameters
+trajectory_planner:
+  ros__parameters:
+    planner_type: "astar"          # astar | hybrid_astar | rrt_star
+    map_topic: "/a300_00000/map"
+    goal_topic: "/goal_pose"
+    path_topic: "/planned_path"
+    base_frame: "base_link"
+    global_frame: "map"
+    inflation_radius_m: 0.35       # metres — matches robot radius
+    occupied_threshold: 65          # OccupancyGrid value >= this → obstacle
+    allow_unknown: true             # treat unknown cells (-1) as free
+    use_sim_time: true

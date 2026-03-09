@@ -65,39 +65,67 @@ navigation/
     └── waypoint_navigator.py         # Waypoint navigation node
 ```
 
-## Quick Start
+## Quick Start - Official Clearpath Packages
 
-### 1. Start Simulation + Localization
+### Scenario 1: Nav2 + SLAM (Mapping)
+Use this for exploring new environments and building maps:
 
 ```bash
 # Terminal 1: Gazebo simulation
 ros2 launch clearpath_gz simulation.launch.py setup_path:=/home/prajjwal/clearpath
 
-# Terminal 2: SLAM or localization
+# Terminal 2: Nav2 stack initialization
+ros2 launch clearpath_nav2_demos nav2.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
+
+# Terminal 3: SLAM for mapping
 ros2 launch clearpath_nav2_demos slam.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
 
-# Terminal 3: RViz
+# Terminal 4: Visualization (RViz)
 ros2 launch clearpath_viz view_navigation.launch.py namespace:=/a300_00000 use_sim_time:=true
 ```
 
-### 2. Launch Nav2 Stack
+### Scenario 2: Nav2 + Localization (Known Map)
+Use this for autonomous navigation with a pre-built map:
 
 ```bash
-# Terminal 4: Nav2 navigation
-ros2 launch /home/prajjwal/clearpath/navigation/launch/navigation.launch.py \
-    namespace:=a300_00000 \
-    use_sim_time:=true
+# Terminal 1: Gazebo simulation
+ros2 launch clearpath_gz simulation.launch.py setup_path:=/home/prajjwal/clearpath
+
+# Terminal 2: Nav2 stack initialization
+ros2 launch clearpath_nav2_demos nav2.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
+
+# Terminal 3: Localization (MCL - Monte Carlo Localization)
+ros2 launch clearpath_nav2_demos localization.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
+
+# Terminal 4: Visualization (RViz)
+ros2 launch clearpath_viz view_navigation.launch.py namespace:=/a300_00000 use_sim_time:=true
 ```
 
-### 3. Run Waypoint Navigation
+### Scenario 3: Run Waypoint Navigation (Custom)
+Once Nav2 is running (either SLAM or localization), send autonomous goals:
 
+**First time setup (build the package):**
+```bash
+cd /home/prajjwal/clearpath
+colcon build --packages-select navigation
+```
+
+**Then run the waypoint navigator:**
 ```bash
 # Terminal 5: Waypoint navigator
-ros2 run /home/prajjwal/clearpath/navigation/scripts/waypoint_navigator.py \
+source /home/prajjwal/clearpath/install/setup.bash
+ros2 run navigation waypoint_navigator \
     --ros-args \
     -p waypoints_file:=/home/prajjwal/clearpath/navigation/config/waypoints_square.yaml \
-    -p mode:=loop \
-    -p use_sim_time:=true
+    -p mode:=loop
+```
+
+**Or use convenience alias after sourcing:**
+```bash
+ros2 run navigation waypoint_navigator \
+    --ros-args \
+    -p waypoints_file:=./navigation/config/waypoints_square.yaml \
+    -p mode:=loop
 ```
 
 ## Sensor Integration Details

@@ -357,7 +357,7 @@ def main(args=None):
     # Auto-start if waypoints are loaded
     if navigator.waypoints:
         navigator.get_logger().info('Auto-starting navigation in 3 seconds...')
-        navigator.create_timer(3.0, navigator.start_navigation, oneshot=True)
+        navigator.create_timer(3.0, navigator.start_navigation)
     
     try:
         rclpy.spin(navigator)
