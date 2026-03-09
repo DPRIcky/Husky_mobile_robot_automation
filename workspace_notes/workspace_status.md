@@ -1,6 +1,6 @@
 # Workspace Status & Component Overview
 
-**Last Updated:** March 7, 2026  
+**Last Updated:** March 9, 2026 (Iteration 5 complete)
 **Project:** Clearpath A300 Autonomous Navigation System
 
 ---
@@ -10,7 +10,7 @@
 - **Robot:** Clearpath A300 (a300-00000)
 - **ROS Version:** ROS 2 Jazzy
 - **Main Goal:** Autonomous path planning and obstacle avoidance with multi-sensor fusion
-- **Current Status:** Iteration 1 completed | Navigation system framework in place
+- **Current Status:** ✅ Iteration 5 complete | Full obstacle avoidance + stuck/off-path recovery working
 
 ---
 
@@ -80,12 +80,14 @@
 - Launch: `planner.launch.py`
 
 ### 7. **Simple Motion** (`/simple_motion_pkg`) — NEW
-**Status:** ✅ Complete (Iteration 3, Mar 8 2026)
-- P-controller path follower with lookahead
-- Subscribes: `/planned_path`
-- Publishes: `/a300_00000/cmd_vel`
+**Status:** ✅ Complete (Iteration 5, Mar 9 2026)
+- P-controller path follower with lookahead + obstacle stop-and-replan
+- Subscribes: `/planned_path`, `/a300_00000/sensors/lidar2d_0/scan`
+- Publishes: `/a300_00000/cmd_vel`, `/goal_pose` (replan requests)
 - Config: `motion_params.yaml`
 - Launch: `motion.launch.py`
+- **Key params:** stop_dist=0.25m, warn_dist=0.5m, check_angle=±25°, scan TF-corrected
+- **Recovery:** stuck detection (4s/0.15m), off-path detection (1.5m threshold)
 
 ### 8. **Autonomy Bringup** (`/autonomy_bringup`) — NEW
 **Status:** ✅ Complete (Iteration 3, Mar 8 2026)
@@ -195,15 +197,22 @@ map
 
 ## 📝 Ongoing Work
 
-### Current Iteration: 3 (A* Trajectory Planner)
+### Current Iteration: 5 ✅ COMPLETE
 - ✅ Navigation package structure created (Iter 1)
 - ✅ Nav2 configuration completed (Iter 1)
 - ✅ Aligned with official Clearpath packages (Iter 2)
 - ✅ A* trajectory planner package created (Iter 3)
 - ✅ Simple motion controller created (Iter 3)
 - ✅ Autonomy bringup launch created (Iter 3)
-- ✅ All 3 new packages build and pass smoke tests
-- ⏳ End-to-end simulation testing pending
+- ✅ Added lidar obstacle detection to path follower (Iter 4)
+- ✅ Fixed wrong lidar topic (Iter 4)
+- ✅ Fixed stop_dist/inflation_radius conflict (Iter 4)
+- ✅ Fixed SLAM noise threshold (Iter 4)
+- ✅ Added goal cell snapping to planner (Iter 4)
+- ✅ Added TF-corrected laser frame angle (Iter 4)
+- ✅ Added stuck detection — replan if <0.15m in 4s (Iter 5)
+- ✅ Added off-path detection — replan if >1.5m from path (Iter 5)
+- ✅ End-to-end obstacle avoidance validated (Iter 5)
 - ⏳ Hybrid-A* / RRT* sim testing pending
 
 ---
@@ -211,6 +220,7 @@ map
 ## 🔗 Related Documents
 
 - [Iteration Log](iteration.md) - Track all changes and updates
+- [Algorithms & Controllers](algorithms.md) - Detailed technical documentation of all planning and control algorithms
 - [main README](../README.md) - Project overview
 - [Navigation README](../navigation/README.md) - Detailed navigation setup
 - [System Overview](../SYSTEM_OVERVIEW.md) - Complete system architecture

@@ -131,6 +131,18 @@ class PlannerNode(Node):
         else:
             grid = self._grid_inflated
 
+        # Snap goal to nearest free cell if it falls inside the inflated zone
+        if grid[goal_rc[0], goal_rc[1]] != 0:
+            snapped = self._nearest_free_cell(grid, goal_rc)
+            if snapped is None:
+                self.get_logger().error(
+                    'Goal is inside obstacle and no free cell found nearby.')
+                return
+            self.get_logger().warn(
+                f'Goal cell {goal_rc} is inside inflated obstacle — '
+                f'snapped to {snapped}')
+            goal_rc = snapped
+
         self.get_logger().info(
             f'Planning {self.planner_type}: '
             f'start=({start_xy[0]:.2f},{start_xy[1]:.2f}) → '
@@ -200,6 +212,32 @@ class PlannerNode(Node):
 
         else:  # 'astar' default
             return astar(grid, start_rc, goal_rc)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _nearest_free_cell(grid, rc, search_radius: int = 20):
+        """BFS outward from rc to find the nearest free (==0) cell."""
+        from collections import deque
+        rows, cols = grid.shape
+        r0, c0 = rc
+        visited = {(r0, c0)}
+        queue = deque([(r0, c0)])
+        while queue:
+            r, c = queue.popleft()
+            if grid[r, c] == 0:
+                return (r, c)
+            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1),(-1,-1),(-1,1),(1,-1),(1,1)]:
+                nr, nc = r + dr, c + dc
+                if (0 <= nr < rows and 0 <= nc < cols
+                        and (nr, nc) not in visited
+                        and abs(nr - r0) <= search_radius
+                        and abs(nc - c0) <= search_radius):
+                    visited.add((nr, nc))
+                    queue.append((nr, nc))
+        return None
 
     # ------------------------------------------------------------------
     # TF helpers

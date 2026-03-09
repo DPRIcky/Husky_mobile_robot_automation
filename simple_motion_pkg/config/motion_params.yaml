@@ -12,4 +12,13 @@ path_follower:
     kp_angular: 1.5
     goal_tolerance: 0.25
     control_rate: 10.0
+    scan_topic: "/a300_00000/sensors/lidar2d_0/scan"
+    obstacle_warn_dist: 0.5       # slow to 50% speed within this distance (metres)
+    obstacle_stop_dist: 0.25      # stop and replan within this distance (metres)
+    obstacle_check_angle: 0.436   # ±25 deg forward cone (radians)
+    map_update_delay_s: 0.8       # wait for SLAM to update map before first replan
+    replan_retry_s: 3.0           # retry replan if still blocked after this long
+    stuck_check_interval_s: 4.0   # seconds between progress checks
+    stuck_dist_threshold_m: 0.15  # min movement (m) to not be considered stuck
+    off_path_dist_m: 1.5          # replan immediately if robot drifts this far from path
     use_sim_time: true

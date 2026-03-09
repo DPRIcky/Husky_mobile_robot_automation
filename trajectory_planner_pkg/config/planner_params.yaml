@@ -7,7 +7,7 @@ trajectory_planner:
     path_topic: "/planned_path"
     base_frame: "base_link"
     global_frame: "map"
-    inflation_radius_m: 0.35       # metres — matches robot radius
-    occupied_threshold: 65          # OccupancyGrid value >= this → obstacle
+    inflation_radius_m: 0.40       # metres — robot half-width ~0.33m + margin
+    occupied_threshold: 85          # OccupancyGrid value >= this → obstacle (SLAM noise ~65-80, real obstacles = 100)
     allow_unknown: true             # treat unknown cells (-1) as free
     use_sim_time: true

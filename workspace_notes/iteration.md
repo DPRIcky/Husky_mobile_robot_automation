@@ -10,6 +10,8 @@
 - [Iteration 1](#iteration-1-autonomous-navigation-framework) — Feb 5-Mar 5, 2026 ✅ COMPLETE
 - [Iteration 2](#iteration-2) — Mar 7, 2026 🟡 IN PROGRESS
 - [Iteration 3](#iteration-3-a-trajectory-planner) — Mar 8, 2026 ✅ COMPLETE
+- [Iteration 4](#iteration-4-obstacle-avoidance-debugging) — Mar 9, 2026 ✅ COMPLETE
+- [Iteration 5](#iteration-5-stuck-and-off-path-recovery) — Mar 9, 2026 ✅ COMPLETE
 
 ---
 
@@ -313,4 +315,148 @@ For each session, use this format:
 - **Inflation**: Circular kernel, default radius = robot radius (0.35 m)
 - **Path follower**: Kp_v=0.5, Kp_w=1.5, lookahead=0.5 m, goal_tol=0.25 m
 - **Sim time**: All nodes respect `use_sim_time` parameter
+
+
+---
+
+## Iteration 4: Obstacle Avoidance Debugging
+
+**Date:** March 9, 2026
+**Status:** ✅ COMPLETE
+
+### Objectives
+- [✅] Fix robot colliding with obstacles
+- [✅] Add lidar-based obstacle detection to path follower
+- [✅] Fix wrong lidar topic subscription
+- [✅] Fix obstacle detection angle (±60° → ±25°)
+- [✅] Fix stop_dist vs inflation_radius conflict
+- [✅] Fix occupied_threshold — SLAM noise causing route detours
+- [✅] Fix goal cell snapping in planner
+- [✅] Fix laser frame angle offset (TF-corrected scan angles)
+- [⏳] Full end-to-end obstacle avoidance validation
+
+### Root Causes Found & Fixed (in order)
+
+#### Fix 1 — Path follower had no obstacle avoidance
+- **Problem:** Original path_follower.py was a pure P-controller with zero sensor input
+- **Fix:** Added LaserScan subscription + stop-and-replan logic
+
+#### Fix 2 — Wrong lidar topic (CRITICAL)
+- **Problem:** Subscribed to `/a300_00000/lidar2d_0/scan` — NO publishers
+- **Correct topic:** `/a300_00000/sensors/lidar2d_0/scan` (confirmed in clearpath_nav2_demos slam.launch.py)
+- **Fix:** Updated scan_topic in motion_params.yaml and path_follower.py default
+
+#### Fix 3 — Reactive steering caused oscillation
+- **Problem:** Robot rotated toward clearer side → re-aimed at old path → saw obstacle → rotated again → infinite loop
+- **Fix:** Removed reactive steering. Now: stop → wait 0.8s for map update → replan → wait for new path
+
+#### Fix 4 — Obstacle check angle too wide (±60° → ±25°)
+- **Problem:** ±60° cone caught corridor walls. Wall 0.5m to side → detected at 0.5/sin(60°)=0.577m < 0.6m stop threshold
+- **Fix:** `obstacle_check_angle: 0.436` (±25°). Wall at 0.5m now at 0.5/sin(25°)=1.18m → no false stop
+
+#### Fix 5 — stop_dist > inflation_radius (CORE CONFLICT)
+- **Problem:** stop_dist=0.6m > inflation_radius=0.4m → lidar stopped robot at walls planner intentionally planned near
+- **Observed:** "Obstacle at 0.59m" firing 15ms after path received — robot never moved
+- **RULE: stop_dist MUST always be < inflation_radius**
+- **Fix:** obstacle_stop_dist: 0.25m (< inflation 0.40m)
+
+#### Fix 6 — SLAM noise treated as obstacles
+- **Problem:** occupied_threshold=65 treated SLAM noise (value 65-80) as solid obstacles → long detour routes
+- **SLAM values:** Free=0, Unknown=-1, Noise/uncertainty=65-80, Real obstacles=100
+- **Fix:** `occupied_threshold: 85`
+
+#### Fix 7 — Goal cell in inflated zone → silent planner failure
+- **Problem:** A* returns None if goal cell is inside inflated obstacle. No error shown to user. No path generated.
+- **Fix:** Added `_nearest_free_cell()` BFS in planner_node.py to snap goal to nearest free cell
+
+#### Fix 8 — Laser frame not corrected to base_link
+- **Problem:** Scan angles used raw (laser frame). If laser is rotated on robot, ±25° check was wrong direction
+- **Fix:** `_get_laser_yaw_offset()` looks up TF `lidar2d_0_laser → base_link` once, caches yaw offset, applies to all angle checks
+- Also added `range_min` filtering (was only filtering r<=0, now uses scan.range_min=0.05m)
+
+#### Fix 9 — Inflation radius tuning history
+- 0.35m (original) → 0.50m (too aggressive, blocked goals/corridors) → **0.40m (current)**
+
+### Current Parameter Values
+
+| Parameter | Value | Reason |
+|-----------|-------|--------|
+| `inflation_radius_m` | 0.40m | Robot half-width ~0.33m + margin |
+| `occupied_threshold` | 85 | Filter SLAM noise (65-80), keep real obstacles (100) |
+| `scan_topic` | `/a300_00000/sensors/lidar2d_0/scan` | Actual Clearpath lidar topic |
+| `obstacle_stop_dist` | 0.25m | Must be < inflation_radius (0.40m) |
+| `obstacle_warn_dist` | 0.50m | Slow to 50% near obstacles |
+| `obstacle_check_angle` | 0.436 rad (±25°) | Narrow enough to avoid false stops from side walls |
+| `map_update_delay_s` | 0.8s | Wait for SLAM to update map before replanning |
+| `replan_retry_s` | 3.0s | Retry if still blocked |
+
+### Architecture: Stop-and-Replan Flow
+```
+Obstacle enters forward cone (±25°, corrected to base_link frame):
+  1. Stop immediately
+  2. Wait 0.8s → SLAM updates map with new obstacle
+  3. Publish current goal to /goal_pose → planner replans
+  4. Remain stopped until new /planned_path arrives
+  5. New path → reset state → resume
+  6. If still blocked after 3s → retry replan
+```
+
+### Key Rules Established
+1. **stop_dist < inflation_radius** — hard rule, always
+2. **Lidar topic = `/a300_00000/sensors/lidar2d_0/scan`** — not `/lidar2d_0/scan`
+3. **Always correct scan to robot frame via TF** — raw angles are in laser frame
+4. **occupied_threshold = 85** for SLAM toolbox maps
+5. **Goal snapping required** — planner silently fails if goal is in inflated zone
+6. **No reactive steering** — stop+replan only for known environments
+
+
+---
+
+## Iteration 5: Stuck & Off-Path Recovery
+
+**Date:** March 9, 2026
+**Status:** ✅ COMPLETE
+
+### Problem Statement
+After Iteration 4 fixes, the robot was still observed heading directly into an obstacle (confirmed via RViz + Gazebo screenshot) without triggering any replanning. The lidar-based stop (±25° cone, 0.25m) was not catching the obstacle because:
+1. The robot was approaching at an angle — obstacle slightly outside the narrow forward cone
+2. Once physically pushed off-path, no recovery mechanism existed
+
+### Fix 1 — Stuck Detection
+
+**Mechanism:** Progress checkpoint every `stuck_check_interval_s` (4 s). If the robot has moved less than `stuck_dist_threshold_m` (0.15 m) while actively following a path, publish a replan request. Checkpoint resets when a new path is received.
+
+**New parameters added to motion_params.yaml:**
+- `stuck_check_interval_s: 4.0`
+- `stuck_dist_threshold_m: 0.15`
+
+### Fix 2 — Off-Path Detection
+
+**Mechanism:** Every control loop tick (10 Hz), compute minimum Euclidean distance from the robot to any point on `_path`. If this exceeds `off_path_dist_m` (1.5 m), stop immediately and publish replan request.
+
+**Rationale:** If the robot is >1.5m from its planned path it has either been physically displaced or the path is no longer reachable from current position. Replanning from current pose gives a fresh valid path.
+
+**Latency:** ~100 ms (next control loop tick).
+
+**New parameter:**
+- `off_path_dist_m: 1.5`
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `simple_motion_pkg/simple_motion_pkg/path_follower.py` | Added stuck detection + off-path detection |
+| `simple_motion_pkg/config/motion_params.yaml` | Added 3 new parameters |
+
+### Recovery Behaviour Summary (Post Iteration 5)
+
+| Trigger | Method | Latency |
+|---------|--------|---------|
+| Obstacle in lidar forward cone | Scan check (10 Hz) | ~100 ms |
+| Robot drifted off planned path | Distance to path (10 Hz) | ~100 ms |
+| Robot stalled / stuck | Pose progress (every 4 s) | up to 4 s |
+| Replan did not clear obstacle | Retry timer (every 3 s) | 3 s |
+
+### Test Result
+✅ Robot successfully avoids obstacles and replans when deviated from path.
 
