@@ -1,6 +1,6 @@
 # Workspace Status & Component Overview
 
-**Last Updated:** March 9, 2026 (Iteration 5 complete)
+**Last Updated:** March 10, 2026 (Iteration 8 complete)
 **Project:** Clearpath A300 Autonomous Navigation System
 
 ---
@@ -10,7 +10,7 @@
 - **Robot:** Clearpath A300 (a300-00000)
 - **ROS Version:** ROS 2 Jazzy
 - **Main Goal:** Autonomous path planning and obstacle avoidance with multi-sensor fusion
-- **Current Status:** ✅ Iteration 5 complete | Full obstacle avoidance + stuck/off-path recovery working
+- **Current Status:** ✅ Iteration 8 complete | Compare mode, tuned obstacle avoidance, stable replanning loop
 
 ---
 
@@ -70,29 +70,27 @@
 - Launch: `manipulators-service.launch.py`
 
 ### 6. **Trajectory Planner** (`/trajectory_planner_pkg`) — NEW
-**Status:** ✅ Complete (Iteration 3, Mar 8 2026)
-- A* baseline planner (grid-based, 8-connected)
-- Optional Hybrid-A* and RRT* via `planner_type` parameter
+**Status:** ✅ Complete (Iteration 6, Mar 10 2026)
+- A* / Hybrid-A* / RRT* planner — switchable via `planner_type` parameter
+- **Compare mode:** runs all 3 planners simultaneously, publishes to 3 separate topics for visual comparison in RViz; robot does NOT move in compare mode
 - Subscribes: `/map` (OccupancyGrid), `/goal_pose` (PoseStamped)
-- Publishes: `/planned_path` (nav_msgs/Path), `/planner_debug` (MarkerArray)
+- Publishes: `/planned_path`, `/planned_path_astar`, `/planned_path_hybrid_astar`, `/planned_path_rrtstar`, `/planner_debug`
 - Start from TF (`map` → `base_link`)
 - Config: `planner_params.yaml`
-- Launch: `planner.launch.py`
 
 ### 7. **Simple Motion** (`/simple_motion_pkg`) — NEW
-**Status:** ✅ Complete (Iteration 5, Mar 9 2026)
+**Status:** ✅ Complete (Iteration 8, Mar 10 2026)
 - P-controller path follower with lookahead + obstacle stop-and-replan
 - Subscribes: `/planned_path`, `/a300_00000/sensors/lidar2d_0/scan`
 - Publishes: `/a300_00000/cmd_vel`, `/goal_pose` (replan requests)
 - Config: `motion_params.yaml`
-- Launch: `motion.launch.py`
-- **Key params:** stop_dist=0.25m, warn_dist=0.5m, check_angle=±25°, scan TF-corrected
-- **Recovery:** stuck detection (4s/0.15m), off-path detection (1.5m threshold)
+- **Key params:** stop_dist=0.40m, warn_dist=0.65m, check_angle=±40°, scan TF-corrected
+- **Recovery:** stuck detection (4s/0.15m), off-path detection (1.5m), `_waiting_for_replan` freeze, closest-waypoint start
 
 ### 8. **Autonomy Bringup** (`/autonomy_bringup`) — NEW
-**Status:** ✅ Complete (Iteration 3, Mar 8 2026)
+**Status:** ✅ Complete (Iteration 6, Mar 10 2026)
 - Unified launch: planner + follower + RViz
-- RViz config: Map, TF, RobotModel, Path, LaserScan, Goal tool
+- RViz config: Map, TF, RobotModel, 4 path displays (A*/Hybrid-A*/RRT*/Selected), LaserScan, Goal tool
 - Launch: `autonomy.launch.py`
 
 ---
@@ -197,7 +195,7 @@ map
 
 ## 📝 Ongoing Work
 
-### Current Iteration: 5 ✅ COMPLETE
+### Current Iteration: 8 ✅ COMPLETE
 - ✅ Navigation package structure created (Iter 1)
 - ✅ Nav2 configuration completed (Iter 1)
 - ✅ Aligned with official Clearpath packages (Iter 2)
@@ -212,8 +210,13 @@ map
 - ✅ Added TF-corrected laser frame angle (Iter 4)
 - ✅ Added stuck detection — replan if <0.15m in 4s (Iter 5)
 - ✅ Added off-path detection — replan if >1.5m from path (Iter 5)
-- ✅ End-to-end obstacle avoidance validated (Iter 5)
-- ⏳ Hybrid-A* / RRT* sim testing pending
+- ✅ Added Hybrid-A* and RRT* planners (Iter 6)
+- ✅ Added compare mode — all 3 paths visualised in RViz simultaneously (Iter 6)
+- ✅ Tuned obstacle parameters: stop_dist→0.40m, angle→±40°, inflation→0.50m (Iter 7)
+- ✅ Fixed replan loop bug (_blocked_since not reset by _path_cb) (Iter 8)
+- ✅ Added _waiting_for_replan flag — robot frozen until new path arrives (Iter 8)
+- ✅ Fixed off-path cooldown reset — _last_replan_time persists across new paths (Iter 8)
+- ✅ Fixed backtracking — path follower starts from closest waypoint after replan (Iter 8)
 
 ---
 

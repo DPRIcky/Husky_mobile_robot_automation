@@ -3,16 +3,15 @@ trajectory_planner:
   ros__parameters:
     # ── Planner selection ──────────────────────────────────────────────────────
     # Options: "astar" | "hybrid_astar" | "rrt_star"
-    planner_type: "astar"
+    planner_type: "hybrid_astar"
 
     # ── Compare mode ───────────────────────────────────────────────────────────
-    # When true: runs ALL THREE planners on every goal.
-    # Each path is published on its own topic and shown in RViz with a distinct colour.
-    # The shortest path is automatically sent to /planned_path for the robot to follow.
-    #   /planned_path_astar         green
-    #   /planned_path_hybrid_astar  cyan
-    #   /planned_path_rrtstar       orange
-    #   /planned_path               white  ← robot follows this one
+    # When true: runs ALL THREE planners on every goal for visual comparison.
+    #   Robot does NOT move — /planned_path is not published.
+    #   Set to false to drive with the single planner_type above.
+    #   /planned_path_astar         green   (RViz)
+    #   /planned_path_hybrid_astar  cyan    (RViz)
+    #   /planned_path_rrtstar       orange  (RViz)
     compare_mode: false
 
     # ── Topics / frames ───────────────────────────────────────────────────────
@@ -23,7 +22,7 @@ trajectory_planner:
     global_frame: "map"
 
     # ── Map processing ────────────────────────────────────────────────────────
-    inflation_radius_m: 0.40       # obstacle inflation (robot half-width ~0.33m + margin)
+    inflation_radius_m: 0.50       # obstacle inflation (robot half-width ~0.33m + margin; must be > obstacle_stop_dist)
     occupied_threshold: 85         # ≥85 → obstacle (SLAM noise is 65-80, real obstacles = 100)
     allow_unknown: true            # treat unknown cells (-1) as free
 

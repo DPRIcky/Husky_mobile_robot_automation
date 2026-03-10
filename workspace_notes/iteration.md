@@ -12,6 +12,9 @@
 - [Iteration 3](#iteration-3-a-trajectory-planner) — Mar 8, 2026 ✅ COMPLETE
 - [Iteration 4](#iteration-4-obstacle-avoidance-debugging) — Mar 9, 2026 ✅ COMPLETE
 - [Iteration 5](#iteration-5-stuck-and-off-path-recovery) — Mar 9, 2026 ✅ COMPLETE
+- [Iteration 6](#iteration-6-compare-mode-all-3-planners-in-rviz) — Mar 10, 2026 ✅ COMPLETE
+- [Iteration 7](#iteration-7-obstacle-avoidance-parameter-tuning) — Mar 10, 2026 ✅ COMPLETE
+- [Iteration 8](#iteration-8-replanning-loop-fixes) — Mar 10, 2026 ✅ COMPLETE
 
 ---
 
@@ -459,4 +462,104 @@ After Iteration 4 fixes, the robot was still observed heading directly into an o
 
 ### Test Result
 ✅ Robot successfully avoids obstacles and replans when deviated from path.
+
+---
+
+## Iteration 6: Compare Mode — All 3 Planners in RViz
+
+**Date:** March 10, 2026
+**Status:** ✅ COMPLETE
+
+### Problem Statement
+User wanted a visual comparison of all three planners: give a single goal and see three different paths drawn in RViz simultaneously, without the robot moving.
+
+### Changes Made
+
+#### `trajectory_planner_pkg/trajectory_planner_pkg/planner_node.py`
+- Added `compare_mode` boolean parameter
+- When `compare_mode: true`: runs A*, Hybrid-A*, and RRT* sequentially on every goal and publishes each to a separate topic. `/planned_path` is NOT published (robot stays still).
+- Added publishers: `_path_pub_astar`, `_path_pub_hybrid`, `_path_pub_rrt`
+- Added `_plan_compare()` method with summary table logged to console
+- Extracted `_cells_to_path_msg()` helper for reuse
+- Added module-level `_path_length()` helper
+
+#### `trajectory_planner_pkg/config/planner_params.yaml`
+- Added `compare_mode: false` parameter (default off)
+- Added `hybrid_num_headings`, `hybrid_step_size`, `hybrid_steer_angles` params (exposed from hardcoded globals)
+- All 3 planner configs now fully tunable from YAML
+
+#### `autonomy_bringup/config/autonomy.rviz`
+Added 4 path display entries:
+| Display name | Topic | Color |
+|---|---|---|
+| Path — A* (green) | `/planned_path_astar` | 0;220;80 |
+| Path — Hybrid-A* (cyan) | `/planned_path_hybrid_astar` | 0;200;255 |
+| Path — RRT* (orange) | `/planned_path_rrtstar` | 255;140;0 |
+| Path — SELECTED (white) | `/planned_path` | 255;255;255 |
+
+### How to Use Compare Mode
+Set `compare_mode: true` in `planner_params.yaml`, then launch normally. Click a goal in RViz — all 3 paths appear, robot doesn't move. Set back to `false` to drive with the `planner_type` planner.
+
+---
+
+## Iteration 7: Obstacle Avoidance Parameter Tuning
+
+**Date:** March 10, 2026
+**Status:** ✅ COMPLETE
+
+### Problem Statement
+Screenshot confirmed robot physically inside an obstacle in Gazebo. Three root causes:
+1. `obstacle_stop_dist: 0.25m` — robot nearly touching wall before halting
+2. `obstacle_check_angle: ±25°` — side/angled obstacles not caught
+3. `inflation_radius_m: 0.40m` — planner routes too close to walls
+
+### Parameter Changes
+
+| Parameter | Before | After | File |
+|-----------|--------|-------|------|
+| `obstacle_stop_dist` | 0.25 m | **0.40 m** | `motion_params.yaml` |
+| `obstacle_warn_dist` | 0.50 m | **0.65 m** | `motion_params.yaml` |
+| `obstacle_check_angle` | 0.436 rad (±25°) | **0.698 rad (±40°)** | `motion_params.yaml` |
+| `inflation_radius_m` | 0.40 m | **0.50 m** | `planner_params.yaml` |
+
+**Critical constraint maintained:** `obstacle_stop_dist (0.40m) < inflation_radius (0.50m)`
+
+---
+
+## Iteration 8: Replanning Loop Fixes
+
+**Date:** March 10, 2026
+**Status:** ✅ COMPLETE
+
+### Problems Identified
+
+#### Bug 1 — Replan loop with obstacle
+`_path_cb` cleared `_blocked_since = None` on every new path. If the obstacle was still physically there (robot hadn't moved yet), the next control loop tick would restart the whole "wait 0.8s → replan" cycle → new path → clear again → infinite replan loop.
+
+#### Bug 2 — Robot moves before new path arrives
+After requesting a replan (off-path or stuck), there was no mechanism to keep the robot stopped while the planner computed the new path. Robot continued following the old (potentially invalid) path, sometimes driving into the obstacle before the new path arrived.
+
+#### Bug 3 — Off-path cooldown reset on every new path
+`_path_cb` set `_last_replan_time = None`, resetting the 6s cooldown to zero. An immediate re-trigger was possible on the first loop tick after new path arrived.
+
+#### Bug 4 — Backtracking to waypoint 0 after replan
+`_path_cb` always set `_path_idx = 0`. If the robot moved slightly during replan computation, waypoint 0 was now behind it. Robot backtracked to hit it, then continued forward.
+
+### Fixes
+
+#### Fix 1 — Don't clear `_blocked_since` in `_path_cb`
+Obstacle scan is now the **only** thing that clears `_blocked_since`. When path is clear the existing "CLEAR" block in the control loop handles it naturally.
+
+#### Fix 2 — `_waiting_for_replan` flag
+Added `_waiting_for_replan: bool`. Set to `True` in `_publish_replan()`. Cleared to `False` in `_path_cb`. Control loop checks this flag right after obstacle detection; if set, stops and returns — robot stays frozen until new path arrives.
+
+#### Fix 3 — Don't reset `_last_replan_time` in `_path_cb`
+`_last_replan_time` now persists across new paths. The off-path 6s cooldown continues counting from the replan request, not from when the new path arrived.
+
+#### Fix 4 — Start from closest waypoint
+`_path_cb` now finds the waypoint closest to the robot's current TF pose and sets `_path_idx` there instead of always using 0. Eliminates backtracking.
+
+### Files Modified
+- `simple_motion_pkg/simple_motion_pkg/path_follower.py` — all 4 fixes
+- `simple_motion_pkg/config/motion_params.yaml` — `off_path_dist_m` restored to 1.5m (had been tightened to 1.0m unnecessarily)
 

@@ -88,6 +88,7 @@ class PathFollower(Node):
         self._blocked_since = None         # when obstacle was first seen
         self._replan_requested: bool = False   # have we asked for a replan?
         self._last_replan_time = None      # when we last published a replan request
+        self._waiting_for_replan: bool = False  # stop robot until new path arrives
 
         # Stuck detection
         self._stuck_check_pose = None
@@ -116,16 +117,32 @@ class PathFollower(Node):
             self.get_logger().warn('Received path with < 2 poses, ignoring.')
             return
         self._path = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
-        self._path_idx = 0
+
+        # Start from the waypoint closest to the robot's current position.
+        # This prevents backtracking to index 0 when a replan delivers a path
+        # whose first point is slightly behind where the robot now sits.
+        pose = self._get_robot_pose()
+        if pose is not None:
+            rx, ry, _ = pose
+            dists = [math.hypot(px - rx, py - ry) for px, py in self._path[:-1]]
+            self._path_idx = dists.index(min(dists))
+        else:
+            self._path_idx = 0
+
         self._active = True
         self._current_goal = self._path[-1]
-        # New path received — clear blocked and stuck state, resume
-        self._blocked_since = None
+        # New path received — unblock robot and reset replan flags.
+        # NOTE: _blocked_since is intentionally NOT cleared here; the obstacle
+        # scan is the only thing that should clear it so we don't restart the
+        # "wait 0.8 s → replan" cycle while the physical obstacle is still there.
+        # NOTE: _last_replan_time is intentionally NOT cleared so the off-path
+        # cooldown continues after a replan.
+        self._waiting_for_replan = False
         self._replan_requested = False
-        self._last_replan_time = None
         self._stuck_check_pose = None
         self._stuck_check_time = None
-        self.get_logger().info(f'New path: {len(self._path)} waypoints — resuming.')
+        self.get_logger().info(
+            f'New path: {len(self._path)} waypoints — starting from wp {self._path_idx}.')
 
     def _scan_cb(self, msg: LaserScan):
         self._latest_scan = msg
@@ -215,7 +232,6 @@ class PathFollower(Node):
             if not self._replan_requested and blocked_sec >= self.map_upd_delay:
                 self._publish_replan()
                 self._replan_requested = True
-                self._last_replan_time = now
                 return
 
             # If still blocked after retry interval, request again
@@ -225,7 +241,6 @@ class PathFollower(Node):
                     self.get_logger().warn(
                         f'Still blocked after {since_last:.1f}s — retrying replan.')
                     self._publish_replan()
-                    self._last_replan_time = now
             return
 
         # ---- CLEAR: obstacle gone or never there ----
@@ -233,7 +248,14 @@ class PathFollower(Node):
             self.get_logger().info('Path clear — resuming without replan.')
             self._blocked_since = None
             self._replan_requested = False
-            self._last_replan_time = None
+            # _last_replan_time intentionally kept so off-path cooldown persists
+
+        # ---- WAITING FOR REPLANNED PATH ----
+        # A replan was requested (obstacle or off-path/stuck) and we haven't
+        # received the new path yet.  Stop completely until it arrives.
+        if self._waiting_for_replan:
+            self._stop()
+            return
 
         # ---- NORMAL PATH FOLLOWING ----
         pose = self._get_robot_pose()
@@ -260,14 +282,23 @@ class PathFollower(Node):
                 self._stuck_check_time = now
 
         # ---- OFF-PATH DETECTION ----
-        # Find minimum distance from robot to any point on the current path
+        # Only trigger if robot has drifted far AND enough time has passed since
+        # the last replan (cooldown prevents rapid-replan loops after each replan
+        # delivers a path whose start is slightly behind the robot).
         min_path_dist = min(math.hypot(px - rx, py - ry) for px, py in self._path)
-        if min_path_dist > self.off_path_dist and self._current_goal:
+        replan_cooldown = self.replan_retry * 2.0   # e.g. 6 s
+        since_last_replan = (
+            (now - self._last_replan_time).nanoseconds * 1e-9
+            if self._last_replan_time is not None else float('inf')
+        )
+        if (min_path_dist > self.off_path_dist
+                and self._current_goal
+                and since_last_replan > replan_cooldown):
             self.get_logger().warn(
                 f'Off-path: {min_path_dist:.2f}m from path (limit {self.off_path_dist}m) — replanning.')
             self._publish_replan()
-            self._stop()
-            return
+            # _waiting_for_replan=True set inside _publish_replan; robot will
+            # stop at top of next loop tick and wait for the new path.
 
         # Advance path index past points within lookahead
         while self._path_idx < len(self._path) - 1:
@@ -320,6 +351,8 @@ class PathFollower(Node):
         msg.pose.position.z = 0.0
         msg.pose.orientation.w = 1.0
         self._goal_pub.publish(msg)
+        self._waiting_for_replan = True   # stop robot until new path arrives
+        self._last_replan_time = self.get_clock().now()
         self.get_logger().info(f'Replan requested → goal ({gx:.2f}, {gy:.2f})')
 
     def _get_robot_pose(self):

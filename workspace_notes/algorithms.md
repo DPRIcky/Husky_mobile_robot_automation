@@ -1,7 +1,7 @@
 # Algorithms & Controllers — Technical Reference
 
 **Project:** Clearpath A300 Autonomous Navigation
-**Last Updated:** March 9, 2026
+**Last Updated:** March 10, 2026
 
 This document describes every planning algorithm and controller implemented in the custom autonomy stack (`trajectory_planner_pkg` + `simple_motion_pkg`).
 
@@ -13,18 +13,20 @@ This document describes every planning algorithm and controller implemented in t
 /goal_pose (PoseStamped)
         │
         ▼
-┌─────────────────────────┐    /planned_path (nav_msgs/Path)
-│  trajectory_planner_pkg │ ──────────────────────────────────┐
-│  (A* / Hybrid-A* / RRT*)│                                   │
-└─────────────────────────┘                                   │
-         ▲                                                     ▼
-         │ replan requests                        ┌──────────────────────────┐
-         │◄──────────────────────────────────────│   simple_motion_pkg      │
-                                                  │   (P-controller +        │
-/a300_00000/map (OccupancyGrid) ──► planner       │    obstacle avoidance)   │
-/a300_00000/sensors/lidar2d_0/scan ──► follower   └──────────────────────────┘
-                                                           │
-                                                           ▼
+┌─────────────────────────┐    /planned_path            (single planner mode)
+│  trajectory_planner_pkg │ ──────────────────────────────────────────────────┐
+│  (A* / Hybrid-A* / RRT*)│    /planned_path_astar      (compare mode only)   │
+│                         │    /planned_path_hybrid_astar                      │
+│  compare_mode=false:    │    /planned_path_rrtstar                           │
+│    single planner runs  │                                                    ▼
+│  compare_mode=true:     │                                   ┌──────────────────────────┐
+│    all 3 run, no cmd_vel│                                   │   simple_motion_pkg      │
+└─────────────────────────┘                                   │   (P-controller +        │
+         ▲                                                     │    obstacle avoidance)   │
+         │ replan requests (/goal_pose)                        └──────────────────────────┘
+         │◄──────────────────────────────────────────────────────────│
+/a300_00000/map (OccupancyGrid) ──► planner                         │
+/a300_00000/sensors/lidar2d_0/scan ──► follower                     ▼
                                               /a300_00000/cmd_vel (TwistStamped)
 ```
 
@@ -103,6 +105,11 @@ new_pos = pos + step_size × (cos(new_θ), sin(new_θ))
 **Heuristic:** Euclidean distance to goal (ignoring heading).
 
 **Goal tolerance:** 2 cells spatial + 1 heading bin.
+
+**Configurable parameters (planner_params.yaml):**
+- `hybrid_num_headings` (default 72) — heading resolution
+- `hybrid_step_size` (default 1.0) — step length in grid cells
+- `hybrid_steer_angles` (default [-0.5, 0.0, 0.5]) — steering options in radians
 
 **When to use:** When path curvature matters (e.g., tight corridors, car-like robots). Currently set via `planner_type: hybrid_astar` in `planner_params.yaml`.
 
@@ -207,32 +214,39 @@ For each laser ray i:
 **Zones:**
 | Zone | Distance | Action |
 |------|----------|--------|
-| Warn zone | < 0.5 m | Halve linear speed |
-| Danger zone | < 0.25 m | Stop + trigger replan state machine |
+| Warn zone | < 0.65 m | Halve linear speed |
+| Danger zone | < 0.40 m | Stop + trigger replan state machine |
 
-> **Critical constraint:** `stop_dist (0.25 m) < inflation_radius (0.40 m)`.
+> **Critical constraint:** `stop_dist (0.40 m) < inflation_radius (0.50 m)`.
 > If stop_dist ≥ inflation_radius, the planner can legitimately plan paths past walls that the follower then stops at, causing infinite replanning loops.
 
 ---
 
 ### 2.3 Stop-and-Replan State Machine
 
-Triggered when obstacle enters danger zone (< 0.25 m):
+Triggered when obstacle enters danger zone (< 0.40 m):
 
 ```
 State: BLOCKED
-  t=0:          Stop robot. Record blocked_since.
-  t=map_upd_delay (0.8s): Publish /goal_pose → trigger replanner.
-                           Set replan_requested=True.
-  t=blocked_since + replan_retry (3.0s) intervals:
-                Retry /goal_pose if still blocked.
+  t=0:             Stop robot. Record blocked_since.
+  t=map_upd_delay (0.8s): _publish_replan() → /goal_pose, sets
+                           _waiting_for_replan=True, replan_requested=True.
+  t=last_replan + replan_retry (3.0s) intervals:
+                   Retry if still blocked.
 
-On new /planned_path received:
-  Clear all blocked state → resume following.
+On new /planned_path received (_path_cb):
+  _waiting_for_replan = False  → robot unfreezes
+  _replan_requested   = False  → retry timer resets
+  _blocked_since      UNCHANGED — only cleared by scan going clear
+  _last_replan_time   UNCHANGED — off-path cooldown continues
 
 On obstacle cleared (forward_min > stop_dist):
-  Resume immediately without replan.
+  _blocked_since = None → resume immediately without replan.
 ```
+
+**Key design rules:**
+- `_blocked_since` is ONLY cleared when the laser scan shows the path clear. `_path_cb` must not reset it, otherwise a new path while obstacle is still present restarts the 0.8s wait loop repeatedly.
+- `_waiting_for_replan` freezes the robot between replan request and new path arrival, preventing the robot from moving toward the obstacle during planner computation.
 
 The `map_update_delay` (0.8 s) gives SLAM Toolbox time to incorporate the newly detected obstacle into the costmap before the planner is triggered. Without this delay, the planner would replan using an outdated map and produce the same path.
 
@@ -263,12 +277,27 @@ On new path received: reset checkpoint.
 ```
 Every control cycle (10 Hz):
     min_path_dist = min(euclidean_dist(robot, p) for p in path)
-    if min_path_dist > off_path_dist (1.5 m):
-        → Stop + publish /goal_pose immediately
-        return (skip normal following this cycle)
+    replan_cooldown = replan_retry_s × 2  (= 6 s)
+    since_last_replan = now - _last_replan_time  (∞ if never replanned)
+    if min_path_dist > off_path_dist (1.5 m) AND since_last_replan > cooldown:
+        → _publish_replan()   (sets _waiting_for_replan=True)
+        # robot stops on the next tick via _waiting_for_replan check
 ```
 
+**Cooldown:** 6 s after any replan, off-path detection is suppressed. This prevents a newly replanned path (which starts at the robot's position at replan-time) from immediately triggering another replan because the robot moved a few centimetres during computation.
+
 This is the fastest-acting recovery: triggers within 100 ms of the robot drifting off-path, vs. 4 s for stuck detection.
+
+### 2.6 Closest-Waypoint Start
+
+When `_path_cb` receives a new path (initial plan or replan), it computes the Euclidean distance from the robot's current pose to every waypoint except the last and sets `_path_idx` to the nearest one:
+
+```python
+dists = [hypot(px − rx, py − ry) for px, py in self._path[:-1]]
+self._path_idx = dists.index(min(dists))
+```
+
+**Why:** During a replan, the planner uses the robot's pose at request time. By the time the path arrives (~0.5–1s later) the robot has moved. Without this fix, `_path_idx=0` would be behind the robot, causing a backtrack manoeuvre before proceeding to goal.
 
 ---
 
@@ -278,10 +307,18 @@ This is the fastest-acting recovery: triggers within 100 ms of the robot driftin
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `planner_type` | `astar` | Active planner: `astar` / `hybrid_astar` / `rrt_star` |
-| `inflation_radius_m` | 0.40 | Obstacle inflation radius (robot half-width 0.33 m + 0.07 m margin) |
+| `planner_type` | `hybrid_astar` | Active planner: `astar` / `hybrid_astar` / `rrt_star` |
+| `compare_mode` | false | When true: run all 3 planners, publish 3 paths, robot does NOT move |
+| `inflation_radius_m` | 0.50 | Obstacle inflation radius (must be > obstacle_stop_dist) |
 | `occupied_threshold` | 85 | SLAM values ≥85 treated as obstacle (noise is 65-80) |
 | `allow_unknown` | true | Unknown cells (-1) treated as free for planning |
+| `hybrid_num_headings` | 72 | Heading bins for Hybrid-A* (360/72 = 5° resolution) |
+| `hybrid_step_size` | 1.0 | Hybrid-A* step length in grid cells |
+| `hybrid_steer_angles` | [-0.5, 0.0, 0.5] | Steering options in radians |
+| `rrt_max_iter` | 8000 | Max RRT* tree nodes |
+| `rrt_step_size` | 5.0 | Max RRT* extension per step (cells) |
+| `rrt_goal_sample_rate` | 0.10 | Probability of sampling goal directly |
+| `rrt_search_radius` | 10.0 | RRT* rewire neighbourhood radius (cells) |
 
 ### Follower (`motion_params.yaml`)
 
@@ -293,9 +330,9 @@ This is the fastest-acting recovery: triggers within 100 ms of the robot driftin
 | `kp_linear` | 0.5 | P-gain for forward speed |
 | `kp_angular` | 1.5 | P-gain for yaw correction |
 | `goal_tolerance` | 0.25 m | Radius to declare goal reached |
-| `obstacle_warn_dist` | 0.5 m | Slow to 50% in this zone |
-| `obstacle_stop_dist` | 0.25 m | Stop and replan in this zone |
-| `obstacle_check_angle` | ±25° | Forward cone half-angle |
+| `obstacle_warn_dist` | 0.65 m | Slow to 50% in this zone |
+| `obstacle_stop_dist` | 0.40 m | Stop and replan in this zone (must be < inflation_radius) |
+| `obstacle_check_angle` | ±40° (0.698 rad) | Forward cone half-angle |
 | `map_update_delay_s` | 0.8 s | Wait for SLAM before first replan |
 | `replan_retry_s` | 3.0 s | Replan retry interval when still blocked |
 | `stuck_check_interval_s` | 4.0 s | Stuck detection interval |
@@ -308,10 +345,12 @@ This is the fastest-acting recovery: triggers within 100 ms of the robot driftin
 
 | Trigger | Detection Method | Latency | Action |
 |---------|-----------------|---------|--------|
-| Obstacle in forward cone | LiDAR scan (10 Hz) | ~100 ms | Stop → wait 0.8 s → replan |
-| Robot drifted off path | Distance to path (10 Hz) | ~100 ms | Stop → replan immediately |
-| Robot stuck / stalled | Pose progress (every 4 s) | ≤4 s | Replan |
+| Obstacle in forward cone | LiDAR scan (10 Hz) | ~100 ms | Stop → wait 0.8 s → replan → freeze until new path |
+| Robot drifted off path | Distance to path (10 Hz) | ~100 ms | Replan → freeze until new path (6 s cooldown) |
+| Robot stuck / stalled | Pose progress (every 4 s) | ≤4 s | Replan → freeze until new path |
 | Still blocked after replan | Timer (every 3 s) | 3 s | Retry replan |
+
+**Robot freeze:** whenever `_publish_replan()` is called, `_waiting_for_replan=True` is set. The control loop stops the robot and returns early until `_path_cb` clears this flag when the new path arrives. This prevents the robot from moving toward obstacles during planner computation.
 
 ---
 

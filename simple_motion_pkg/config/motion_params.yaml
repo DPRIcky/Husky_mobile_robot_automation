@@ -13,9 +13,9 @@ path_follower:
     goal_tolerance: 0.25
     control_rate: 10.0
     scan_topic: "/a300_00000/sensors/lidar2d_0/scan"
-    obstacle_warn_dist: 0.5       # slow to 50% speed within this distance (metres)
-    obstacle_stop_dist: 0.25      # stop and replan within this distance (metres)
-    obstacle_check_angle: 0.436   # ±25 deg forward cone (radians)
+    obstacle_warn_dist: 0.65      # slow to 50% speed within this distance (metres)
+    obstacle_stop_dist: 0.40      # stop and replan within this distance (metres)
+    obstacle_check_angle: 0.698   # ±40 deg forward cone (radians) — wider to catch side obstacles
     map_update_delay_s: 0.8       # wait for SLAM to update map before first replan
     replan_retry_s: 3.0           # retry replan if still blocked after this long
     stuck_check_interval_s: 4.0   # seconds between progress checks

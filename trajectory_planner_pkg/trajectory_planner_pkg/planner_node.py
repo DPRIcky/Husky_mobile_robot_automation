@@ -4,14 +4,14 @@ nav_msgs/Path using A* (default), Hybrid-A*, or RRT*.
 
 Compare mode (compare_mode: true):
   Runs ALL THREE planners on every goal and publishes each on a separate topic
-  so you can see them side-by-side in RViz.  The shortest path is automatically
-  sent to /planned_path for the robot to follow.
+  so you can see them side-by-side in RViz.  Paths are shown side-by-side for visual comparison — robot does NOT move.
+  Set compare_mode: false to drive with a single planner.
 
   Topics published in compare mode:
     /planned_path_astar         — A* result  (green in RViz)
     /planned_path_hybrid_astar  — Hybrid-A*  (cyan in RViz)
     /planned_path_rrtstar       — RRT*        (orange in RViz)
-    /planned_path               — SELECTED best path (white, robot follows this)
+    /planned_path               — NOT published (robot stays still)
 """
 
 import math
@@ -273,18 +273,18 @@ class PlannerNode(Node):
             f'  RRT*:        FAIL  {t_rrt*1000:.0f}ms')
 
         if not results:
-            self.get_logger().warn('All planners failed — no path published.')
+            self.get_logger().warn('All planners failed — no path to display.')
             self._publish_debug_markers([], start_rc, goal_rc)
             return
 
-        # ── Select best path (shortest length) ──────────────────────────
-        best_name = min(results, key=lambda k: results[k][2])
-        best_cells, best_t, best_len = results[best_name]
+        # In compare mode the robot stays still — paths are for visual comparison only.
+        # Log a summary table so results are easy to compare in the terminal.
+        self.get_logger().info('  ── Summary ──────────────────────────────────')
+        for name, (_, elapsed, length) in sorted(results.items(), key=lambda x: x[1][2]):
+            self.get_logger().info(
+                f'    {name:20s}  {length:.2f}m  {elapsed*1000:.0f}ms')
         self.get_logger().info(
-            f'  ✓ Selected: {best_name}  ({best_len:.2f}m)  '
-            f'— robot will follow this path')
-        self._path_pub.publish(self._cells_to_path_msg(best_cells, ox, oy, res))
-        self._publish_debug_markers(best_cells, start_rc, goal_rc)
+            '  (compare_mode=true: robot does not move — set compare_mode: false to drive)')
 
     # ------------------------------------------------------------------
     # Helpers
