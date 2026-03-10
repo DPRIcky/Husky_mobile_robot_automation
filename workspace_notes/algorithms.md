@@ -1,7 +1,7 @@
 # Algorithms & Controllers — Technical Reference
 
 **Project:** Clearpath A300 Autonomous Navigation
-**Last Updated:** March 10, 2026
+**Last Updated:** March 10, 2026 (Iteration 9)
 
 This document describes every planning algorithm and controller implemented in the custom autonomy stack (`trajectory_planner_pkg` + `simple_motion_pkg`).
 
@@ -19,15 +19,25 @@ This document describes every planning algorithm and controller implemented in t
 │                         │    /planned_path_hybrid_astar                      │
 │  compare_mode=false:    │    /planned_path_rrtstar                           │
 │    single planner runs  │                                                    ▼
-│  compare_mode=true:     │                                   ┌──────────────────────────┐
-│    all 3 run, no cmd_vel│                                   │   simple_motion_pkg      │
-└─────────────────────────┘                                   │   (P-controller +        │
-         ▲                                                     │    obstacle avoidance)   │
-         │ replan requests (/goal_pose)                        └──────────────────────────┘
-         │◄──────────────────────────────────────────────────────────│
-/a300_00000/map (OccupancyGrid) ──► planner                         │
-/a300_00000/sensors/lidar2d_0/scan ──► follower                     ▼
-                                              /a300_00000/cmd_vel (TwistStamped)
+│  compare_mode=true:     │                                   ┌──────────────────────────────┐
+│    all 3 run, no cmd_vel│                                   │   simple_motion_pkg          │
+└─────────────────────────┘                                   │   path_follower              │
+         ▲                                                     │   (Stanley/PID/PP/LQR/MPC + │
+         │ replan requests (/goal_pose)                        │    VelocityProfiler +        │
+         │◄──────────────────────────────────────────────────│    obstacle avoidance)        │
+/a300_00000/map (OccupancyGrid) ──► planner                   └──────────────────────────────┘
+/a300_00000/sensors/lidar2d_0/scan ──► follower                        │
+                                                  /autonomous/cmd_vel  │
+                                                                        ▼
+                                                            ┌──────────────────┐
+                                                            │   twist_mux      │
+                                                            │ E-stop > teleop  │
+                                                            │   > autonomous   │
+                                                            └──────────────────┘
+                                                                        │
+                                                       /a300_00000/cmd_vel (TwistStamped)
+                                                                        │
+                                                                     robot
 ```
 
 ---
@@ -163,34 +173,124 @@ This reduces path length and produces smoother trajectories for the follower.
 
 ## 2. Path Follower (`simple_motion_pkg`)
 
-**File:** `simple_motion_pkg/path_follower.py`
+**Files:** `simple_motion_pkg/path_follower.py`, `controllers/`, `velocity_profiler.py`, `twist_mux.py`
 
-### 2.1 Lookahead + P-Controller
+### 2.0 Controller Architecture
 
-**Algorithm:** Pure Pursuit variant with proportional controllers for linear and angular velocity.
-
-**Lookahead logic:**
-```
-Advance path_idx until path[path_idx] is farther than lookahead_distance (0.5 m) from robot.
-Target point = path[path_idx]
+All 5 controllers share a uniform interface:
+```python
+compute(rx, ry, ryaw, path, path_idx, v, dt)
+    -> (v_cmd, w_cmd, cte, heading_error, new_path_idx)
 ```
 
-This gives a moving carrot point ahead of the robot, smoothing out the steering response.
+The `VelocityProfiler` computes the desired speed `v` before calling the active controller. The controller then scales `v` further (e.g., by `cos(heading_error)`) and computes `w`.
 
-**Control law:**
+**Compare mode** (`controller_compare_mode: true`): all 5 controllers run every tick. Only the one selected by `controller_type` drives the robot. All 20 values `[v,w,cte,he] × 5` are published to `/controller_diagnostics`.
+
+### 2.1 Stanley Controller
+
+**File:** `controllers/stanley.py`
+
 ```
-desired_yaw = atan2(target_y − robot_y, target_x − robot_x)
-yaw_error   = normalize(desired_yaw − robot_yaw)
-
-v = clip(kp_v × dist_to_target,   0, max_v)    # kp_v=0.5,  max_v=0.4 m/s
-w = clip(kp_w × yaw_error,  -max_w, max_w)     # kp_w=1.5,  max_w=1.0 rad/s
+nearest_on_path → (cte, path_heading)
+heading_error = normalize(path_heading − ryaw)
+w = heading_error + atan2(k_e × cte, max(v, v_min))
+v_cmd = v × max(0, cos(heading_error))
 ```
 
-**Speed reduction rules:**
-- `|yaw_error| > 45°` → `v *= 0.3` (slow down for sharp turns)
-- Obstacle in warn zone (< 0.5 m) → `v *= 0.5` (approach slowly)
+Geometric controller. Steering combines heading alignment and cross-track correction. No integral state — robust, deterministic.
 
-**Goal detection:** Euclidean distance to path end < `goal_tolerance` (0.25 m) → stop and deactivate.
+**Parameters:** `stanley_k=1.0`, `stanley_v_min=0.1`
+
+### 2.2 PID Controller
+
+**File:** `controllers/pid.py`
+
+```
+target = advance_lookahead(path, path_idx, lookahead_distance)
+error = normalize(atan2(ty−ry, tx−rx) − ryaw)
+integral += error × dt  (clamped ±windup_limit)
+derivative = (error − prev_error) / dt
+w = kp×error + ki×integral + kd×derivative
+v_cmd = v × max(0.1, 1 − |error|/π)
+```
+
+Anti-windup clamp prevents integral saturation during long straight sections.
+
+**Parameters:** `pid_kp=1.5`, `pid_ki=0.05`, `pid_kd=0.2`, `pid_windup_limit=2.0`
+
+### 2.3 Pure Pursuit Controller
+
+**File:** `controllers/pure_pursuit.py`
+
+```
+target = advance_lookahead(path, path_idx, L)
+# Transform to robot body frame:
+x_robot =  (tx−rx)×cos(ryaw) + (ty−ry)×sin(ryaw)
+y_robot = −(tx−rx)×sin(ryaw) + (ty−ry)×cos(ryaw)
+κ = 2×y_robot / L²
+w = v × κ
+```
+
+No internal state. Classic curvature-based controller.
+
+**Parameters:** `lookahead_distance=0.5`
+
+### 2.4 LQR Controller
+
+**File:** `controllers/lqr.py`
+
+Linearised unicycle at operating point (v, 0):
+```
+A = [[0, v], [0, 0]],  B = [[0], [1]]
+Ad = I + A×dt,  Bd = B×dt
+Solve: P = solve_discrete_are(Ad, Bd, Q, R)
+K = (R + Bd'×P×Bd)^-1 × Bd'×P×Ad
+u = -(K @ [cte, he])[0]
+```
+
+Gain recomputed only when `v` or `dt` changes beyond threshold (avoids DARE overhead every tick). Fallback `K = [[0, 2]]` if DARE fails (e.g., v ≈ 0).
+
+**Parameters:** `lqr_q_cte=5.0`, `lqr_q_he=1.0`, `lqr_r_w=0.5`
+
+### 2.5 MPC Controller
+
+**File:** `controllers/mpc.py`
+
+```
+Optimise over U = [v_0, w_0, ..., v_{N-1}, w_{N-1}]:
+  minimise: Σ (Q_cte×cte_k² + Q_he×he_k² + R_v×v_k² + R_w×w_k²)
+  subject to: 0 ≤ v_k ≤ max_v,  -max_w ≤ w_k ≤ max_w
+  unicycle model: x_{k+1} = x_k + v_k×cos(θ_k)×dt
+                  y_{k+1} = y_k + v_k×sin(θ_k)×dt
+                  θ_{k+1} = θ_k + w_k×dt
+Solver: scipy SLSQP, maxiter=40
+Warm start: shift previous solution 1 step forward
+```
+
+**Parameters:** `mpc_horizon=8`, `mpc_q_cte=5.0`, `mpc_q_he=1.0`, `mpc_r_v=0.1`, `mpc_r_w=0.5`
+
+### 2.6 Velocity Profiler
+
+**File:** `velocity_profiler.py`
+
+Three factors combined multiplicatively:
+
+```
+1. Curvature:    v_curv = v_max / (1 + k_curv × |κ|)
+                 κ computed via Menger formula over 6-waypoint window
+
+2. Goal ramp:    v_goal = v_min + (v_max − v_min) × (dist/goal_ramp_dist)
+                 applied when dist_to_goal < goal_ramp_dist (1.5 m)
+
+3. Obstacle:     v_desired = min(v_curv, v_goal) × obstacle_factor
+                 obstacle_factor: 1.0 (clear) | 0.5 (warn) | 0.0 (stop)
+
+4. Accel limit:  v_final = min(v_desired, v_prev + a_max × dt)
+                 (deceleration is instantaneous — safety stops not delayed)
+```
+
+**Parameters:** `vp_curvature_gain=3.0`, `vp_goal_ramp_dist=1.5`, `vp_min_vel=0.05`, `vp_accel_limit=0.5`
 
 ---
 
@@ -320,15 +420,15 @@ self._path_idx = dists.index(min(dists))
 | `rrt_goal_sample_rate` | 0.10 | Probability of sampling goal directly |
 | `rrt_search_radius` | 10.0 | RRT* rewire neighbourhood radius (cells) |
 
-### Follower (`motion_params.yaml`)
+### Follower / Controller (`motion_params.yaml`)
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
+| `controller_type` | `mpc` | Active controller: stanley/pid/pure_pursuit/lqr/mpc |
+| `controller_compare_mode` | true | Run all 5, publish /controller_diagnostics |
 | `lookahead_distance` | 0.5 m | Carrot distance ahead on path |
 | `max_linear_vel` | 0.4 m/s | Speed cap |
 | `max_angular_vel` | 1.0 rad/s | Turn rate cap |
-| `kp_linear` | 0.5 | P-gain for forward speed |
-| `kp_angular` | 1.5 | P-gain for yaw correction |
 | `goal_tolerance` | 0.25 m | Radius to declare goal reached |
 | `obstacle_warn_dist` | 0.65 m | Slow to 50% in this zone |
 | `obstacle_stop_dist` | 0.40 m | Stop and replan in this zone (must be < inflation_radius) |
@@ -338,6 +438,34 @@ self._path_idx = dists.index(min(dists))
 | `stuck_check_interval_s` | 4.0 s | Stuck detection interval |
 | `stuck_dist_threshold_m` | 0.15 m | Minimum movement to not be stuck |
 | `off_path_dist_m` | 1.5 m | Max allowed distance from planned path |
+| `stanley_k` | 1.0 | Stanley cross-track error gain |
+| `stanley_v_min` | 0.1 m/s | Stanley minimum speed for CTE denominator |
+| `pid_kp` | 1.5 | PID proportional gain |
+| `pid_ki` | 0.05 | PID integral gain |
+| `pid_kd` | 0.2 | PID derivative gain |
+| `pid_windup_limit` | 2.0 rad·s | PID anti-windup clamp |
+| `lqr_q_cte` | 5.0 | LQR state cost for CTE |
+| `lqr_q_he` | 1.0 | LQR state cost for heading error |
+| `lqr_r_w` | 0.5 | LQR control cost for ω |
+| `mpc_horizon` | 8 | MPC prediction horizon |
+| `mpc_q_cte` | 5.0 | MPC stage cost for CTE |
+| `mpc_q_he` | 1.0 | MPC stage cost for heading error |
+| `mpc_r_v` | 0.1 | MPC stage cost for linear velocity |
+| `mpc_r_w` | 0.5 | MPC stage cost for angular velocity |
+| `vp_curvature_gain` | 3.0 | VelocityProfiler curvature divisor sensitivity |
+| `vp_goal_ramp_dist` | 1.5 m | Deceleration start distance from goal |
+| `vp_min_vel` | 0.05 m/s | Minimum speed while active |
+| `vp_accel_limit` | 0.5 m/s² | Max speed increase per second |
+
+### Twist Mux (`motion_params.yaml` under `twist_mux`)
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| `mux_autonomous_topic` | `/autonomous/cmd_vel` | Input from path follower |
+| `mux_teleop_topic` | `/a300_00000/joy_teleop/cmd_vel` | Input from teleop |
+| `mux_output_topic` | `/a300_00000/cmd_vel` | Output to robot |
+| `mux_teleop_timeout_s` | 0.5 s | Teleop fallback timeout |
+| `mux_rate_hz` | 20.0 Hz | Mux output rate |
 
 ---
 

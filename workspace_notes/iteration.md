@@ -15,6 +15,7 @@
 - [Iteration 6](#iteration-6-compare-mode-all-3-planners-in-rviz) — Mar 10, 2026 ✅ COMPLETE
 - [Iteration 7](#iteration-7-obstacle-avoidance-parameter-tuning) — Mar 10, 2026 ✅ COMPLETE
 - [Iteration 8](#iteration-8-replanning-loop-fixes) — Mar 10, 2026 ✅ COMPLETE
+- [Iteration 9](#iteration-9-5-controller-architecture) — Mar 10, 2026 ✅ COMPLETE
 
 ---
 
@@ -563,3 +564,97 @@ Added `_waiting_for_replan: bool`. Set to `True` in `_publish_replan()`. Cleared
 - `simple_motion_pkg/simple_motion_pkg/path_follower.py` — all 4 fixes
 - `simple_motion_pkg/config/motion_params.yaml` — `off_path_dist_m` restored to 1.5m (had been tightened to 1.0m unnecessarily)
 
+
+---
+
+## Iteration 9: 5-Controller Architecture
+
+**Date:** March 10, 2026
+**Status:** ✅ COMPLETE
+
+### Objectives
+- [✅] Replace P-controller with Stanley controller as the default
+- [✅] Add PID, Pure Pursuit, LQR, and MPC controllers
+- [✅] Add velocity profiler (curvature + goal ramp + obstacle factor + accel limit)
+- [✅] Add twist multiplexer node (E-stop > teleop > autonomous)
+- [✅] Add compare mode: all 5 controllers run every tick, only active one drives
+- [✅] All 5 controllers share a uniform interface
+- [✅] Build, verify imports, push to GitHub
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `controllers/utils.py` | Shared geometry: `normalize_angle`, `advance_lookahead`, `nearest_on_path`, `signed_cte` |
+| `controllers/stanley.py` | Stanley controller: `w = he + atan2(k_e × cte, v)` |
+| `controllers/pid.py` | PID yaw controller with anti-windup integral |
+| `controllers/pure_pursuit.py` | Arc curvature `κ = 2·y_robot / L²` in robot body frame |
+| `controllers/lqr.py` | LQR via scipy `solve_discrete_are`, linearised unicycle model |
+| `controllers/mpc.py` | MPC via scipy SLSQP, horizon N=8, warm-started |
+| `controllers/__init__.py` | Exports all 5 + `CONTROLLER_NAMES` tuple |
+| `velocity_profiler.py` | Menger curvature speed, goal ramp, obstacle factor, accel limit |
+| `twist_mux.py` | ROS 2 node: E-stop > teleop (with timeout) > autonomous priority |
+
+### Modified Files
+
+| File | Changes |
+|------|---------|
+| `path_follower.py` | Complete rewrite — controller dispatch, compare mode, `/autonomous/cmd_vel` output |
+| `motion_params.yaml` | All controller + profiler + twist_mux params; default `controller_type: mpc`, `controller_compare_mode: true` |
+| `setup.py` | Added `twist_mux` console_scripts entry |
+| `autonomy.launch.py` | Added twist_mux node |
+
+### Controller Interface (uniform across all 5)
+```python
+compute(rx, ry, ryaw, path, path_idx, v, dt)
+    -> (v_cmd, w_cmd, cte, heading_error, new_path_idx)
+```
+
+### Architecture: cmd_vel routing
+```
+path_follower  -->  /autonomous/cmd_vel
+                            |
+                       twist_mux
+                   (E-stop > teleop > auto)
+                            |
+               /a300_00000/cmd_vel  -->  robot
+```
+
+### Compare Mode
+- `controller_compare_mode: true` — all 5 run every tick
+- Active controller (set by `controller_type`) drives the robot
+- All 20 values [stanley_v, stanley_w, stanley_cte, stanley_he, pid_v, ...] published to `/controller_diagnostics` (Float64MultiArray)
+- Comparison table printed to console every 2 s
+
+### Controller Details
+
+#### Stanley
+- `w = he + atan2(k_e × cte, max(v, v_min))`; geometric, no integral state
+- Params: `stanley_k=1.0`, `stanley_v_min=0.1`
+
+#### PID
+- Error = yaw to lookahead point; anti-windup clamp ±2 rad·s
+- Params: `pid_kp=1.5`, `pid_ki=0.05`, `pid_kd=0.2`
+
+#### Pure Pursuit
+- Lookahead → robot body frame; `κ = 2·y_robot / L²`; `w = v·κ`; no state
+- Params: `lookahead_distance=0.5`
+
+#### LQR
+- State `[cte, he]`, input `[ω]`; discrete DARE via scipy; gain cached between steps
+- Params: `lqr_q_cte=5.0`, `lqr_q_he=1.0`, `lqr_r_w=0.5`
+
+#### MPC
+- Horizon N=8; unicycle rollout; SLSQP, maxiter=40; warm-start from previous solution
+- Params: `mpc_horizon=8`, `mpc_q_cte=5.0`, `mpc_q_he=1.0`, `mpc_r_v=0.1`, `mpc_r_w=0.5`
+
+### Velocity Profiler
+1. Curvature: `v_max / (1 + k_curv × |κ|)` via Menger curvature (6-waypoint window)
+2. Goal ramp: linear `v_min..v_max` within `vp_goal_ramp_dist` (1.5 m) of goal
+3. Obstacle factor: 1.0 (clear) / 0.5 (warn) / 0.0 (stop) — from lidar
+4. Accel limit: `v_final = min(v_desired, v_prev + a_max × dt)`
+
+### Twist Multiplexer Priorities
+1. E-stop (`/estop` Bool) — zero twist
+2. Teleop (`/a300_00000/joy_teleop/cmd_vel`) — overrides for `mux_teleop_timeout_s=0.5s`
+3. Autonomous (`/autonomous/cmd_vel`) — default
