@@ -3,8 +3,17 @@ trajectory_planner:
   ros__parameters:
     # ── Planner selection ──────────────────────────────────────────────────────
     # Options: "astar" | "hybrid_astar" | "rrt_star"
-    # Switch at launch: ros2 launch autonomy_bringup autonomy.launch.py planner_type:=rrt_star
     planner_type: "astar"
+
+    # ── Compare mode ───────────────────────────────────────────────────────────
+    # When true: runs ALL THREE planners on every goal.
+    # Each path is published on its own topic and shown in RViz with a distinct colour.
+    # The shortest path is automatically sent to /planned_path for the robot to follow.
+    #   /planned_path_astar         green
+    #   /planned_path_hybrid_astar  cyan
+    #   /planned_path_rrtstar       orange
+    #   /planned_path               white  ← robot follows this one
+    compare_mode: false
 
     # ── Topics / frames ───────────────────────────────────────────────────────
     map_topic: "/a300_00000/map"

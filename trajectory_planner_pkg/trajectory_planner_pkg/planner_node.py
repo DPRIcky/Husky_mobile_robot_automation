@@ -1,9 +1,21 @@
 """
 ROS 2 planner node — subscribes to OccupancyGrid and goal pose, publishes
 nav_msgs/Path using A* (default), Hybrid-A*, or RRT*.
+
+Compare mode (compare_mode: true):
+  Runs ALL THREE planners on every goal and publishes each on a separate topic
+  so you can see them side-by-side in RViz.  The shortest path is automatically
+  sent to /planned_path for the robot to follow.
+
+  Topics published in compare mode:
+    /planned_path_astar         — A* result  (green in RViz)
+    /planned_path_hybrid_astar  — Hybrid-A*  (cyan in RViz)
+    /planned_path_rrtstar       — RRT*        (orange in RViz)
+    /planned_path               — SELECTED best path (white, robot follows this)
 """
 
 import math
+import time
 import numpy as np
 
 import rclpy
@@ -47,6 +59,8 @@ class PlannerNode(Node):
         self.declare_parameter('rrt_step_size', 5.0)
         self.declare_parameter('rrt_goal_sample_rate', 0.10)
         self.declare_parameter('rrt_search_radius', 10.0)
+        # Compare mode
+        self.declare_parameter('compare_mode', False)
 
         self.planner_type = self.get_parameter('planner_type').value
         map_topic = self.get_parameter('map_topic').value
@@ -63,6 +77,7 @@ class PlannerNode(Node):
         self.rrt_step_size        = self.get_parameter('rrt_step_size').value
         self.rrt_goal_sample_rate = self.get_parameter('rrt_goal_sample_rate').value
         self.rrt_search_radius    = self.get_parameter('rrt_search_radius').value
+        self.compare_mode         = self.get_parameter('compare_mode').value
 
         self.get_logger().info(
             f'Planner starting — type={self.planner_type}, '
@@ -89,8 +104,13 @@ class PlannerNode(Node):
         # ---- Publishers ----
         self._path_pub = self.create_publisher(Path, path_topic, 10)
         self._debug_pub = self.create_publisher(MarkerArray, '/planner_debug', 10)
+        # Per-algorithm publishers (always created; only used in compare_mode)
+        self._path_pub_astar  = self.create_publisher(Path, '/planned_path_astar', 10)
+        self._path_pub_hybrid = self.create_publisher(Path, '/planned_path_hybrid_astar', 10)
+        self._path_pub_rrt    = self.create_publisher(Path, '/planned_path_rrtstar', 10)
 
-        self.get_logger().info('Waiting for map on %s …' % map_topic)
+        mode_str = 'COMPARE (all 3 planners)' if self.compare_mode else self.planner_type
+        self.get_logger().info(f'Waiting for map on {map_topic} … mode={mode_str}')
 
     # ------------------------------------------------------------------
     # Callbacks
@@ -157,25 +177,121 @@ class PlannerNode(Node):
                 f'snapped to {snapped}')
             goal_rc = snapped
 
+        if self.compare_mode:
+            self._plan_compare(grid, start_rc, goal_rc, start_xy, goal_x, goal_y, ox, oy, res)
+        else:
+            self.get_logger().info(
+                f'Planning {self.planner_type}: '
+                f'start=({start_xy[0]:.2f},{start_xy[1]:.2f}) → '
+                f'goal=({goal_x:.2f},{goal_y:.2f})')
+            path_cells = self._run_planner(grid, start_rc, goal_rc, goal_x, goal_y)
+            if path_cells is None:
+                self.get_logger().warn('Planner found NO path.')
+                self._publish_debug_markers([], start_rc, goal_rc)
+                return
+            path_cells = prune_collinear(path_cells)
+            path_cells = shortcut_smooth(path_cells, grid, iterations=80)
+            self.get_logger().info(f'Path found: {len(path_cells)} waypoints')
+            self._path_pub.publish(
+                self._cells_to_path_msg(path_cells, ox, oy, res))
+            self._publish_debug_markers(path_cells, start_rc, goal_rc)
+
+    # ------------------------------------------------------------------
+    # Compare mode — run all 3, publish each, select best for robot
+    # ------------------------------------------------------------------
+
+    def _plan_compare(self, grid, start_rc, goal_rc, start_xy, goal_x, goal_y, ox, oy, res):
         self.get_logger().info(
-            f'Planning {self.planner_type}: '
+            f'COMPARE MODE — running A*, Hybrid-A*, RRT* '
             f'start=({start_xy[0]:.2f},{start_xy[1]:.2f}) → '
             f'goal=({goal_x:.2f},{goal_y:.2f})')
 
-        path_cells = self._run_planner(grid, start_rc, goal_rc, goal_x, goal_y)
+        start_yaw = self._get_robot_yaw() or 0.0
+        goal_yaw  = math.atan2(goal_rc[0] - start_rc[0], goal_rc[1] - start_rc[1])
 
-        if path_cells is None:
-            self.get_logger().warn('Planner found NO path.')
+        results = {}  # name → (path_cells, elapsed_s, length_m)
+
+        # ── A* ──────────────────────────────────────────────────────────
+        t0 = time.monotonic()
+        p = astar(grid, start_rc, goal_rc)
+        t_astar = time.monotonic() - t0
+        if p:
+            p = shortcut_smooth(prune_collinear(p), grid, iterations=80)
+            results['astar'] = (p, t_astar, _path_length(p, res))
+            self._path_pub_astar.publish(self._cells_to_path_msg(p, ox, oy, res))
+        else:
+            self._path_pub_astar.publish(Path())   # clear old display
+        self.get_logger().info(
+            f'  A*:          {"OK  " if p else "FAIL"} '
+            f'{len(p) if p else 0:3d} pts  '
+            f'{results["astar"][2]:.2f}m  {t_astar*1000:.0f}ms' if p else
+            f'  A*:          FAIL  {t_astar*1000:.0f}ms')
+
+        # ── Hybrid-A* ───────────────────────────────────────────────────
+        t0 = time.monotonic()
+        p = hybrid_astar(
+            grid,
+            (start_rc[0], start_rc[1], start_yaw),
+            (goal_rc[0],  goal_rc[1],  goal_yaw),
+            num_headings=self.hybrid_num_headings,
+            step_size=self.hybrid_step_size,
+        )
+        t_hybrid = time.monotonic() - t0
+        if p:
+            p = [(int(round(r)), int(round(c))) for r, c, _ in p]
+            p = shortcut_smooth(prune_collinear(p), grid, iterations=80)
+            results['hybrid_astar'] = (p, t_hybrid, _path_length(p, res))
+            self._path_pub_hybrid.publish(self._cells_to_path_msg(p, ox, oy, res))
+        else:
+            self._path_pub_hybrid.publish(Path())
+        self.get_logger().info(
+            f'  Hybrid-A*:   {"OK  " if p else "FAIL"} '
+            f'{len(p) if p else 0:3d} pts  '
+            f'{results["hybrid_astar"][2]:.2f}m  {t_hybrid*1000:.0f}ms' if p else
+            f'  Hybrid-A*:   FAIL  {t_hybrid*1000:.0f}ms')
+
+        # ── RRT* ────────────────────────────────────────────────────────
+        t0 = time.monotonic()
+        p = rrt_star(
+            grid, start_rc, goal_rc,
+            max_iter=self.rrt_max_iter,
+            step_size=self.rrt_step_size,
+            goal_sample_rate=self.rrt_goal_sample_rate,
+            search_radius=self.rrt_search_radius,
+        )
+        t_rrt = time.monotonic() - t0
+        if p:
+            p = shortcut_smooth(prune_collinear(p), grid, iterations=80)
+            results['rrtstar'] = (p, t_rrt, _path_length(p, res))
+            self._path_pub_rrt.publish(self._cells_to_path_msg(p, ox, oy, res))
+        else:
+            self._path_pub_rrt.publish(Path())
+        self.get_logger().info(
+            f'  RRT*:        {"OK  " if p else "FAIL"} '
+            f'{len(p) if p else 0:3d} pts  '
+            f'{results["rrtstar"][2]:.2f}m  {t_rrt*1000:.0f}ms' if p else
+            f'  RRT*:        FAIL  {t_rrt*1000:.0f}ms')
+
+        if not results:
+            self.get_logger().warn('All planners failed — no path published.')
             self._publish_debug_markers([], start_rc, goal_rc)
             return
 
-        # Post-process
-        path_cells = prune_collinear(path_cells)
-        path_cells = shortcut_smooth(path_cells, grid, iterations=80)
+        # ── Select best path (shortest length) ──────────────────────────
+        best_name = min(results, key=lambda k: results[k][2])
+        best_cells, best_t, best_len = results[best_name]
+        self.get_logger().info(
+            f'  ✓ Selected: {best_name}  ({best_len:.2f}m)  '
+            f'— robot will follow this path')
+        self._path_pub.publish(self._cells_to_path_msg(best_cells, ox, oy, res))
+        self._publish_debug_markers(best_cells, start_rc, goal_rc)
 
-        self.get_logger().info(f'Path found: {len(path_cells)} waypoints')
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-        # Convert to world & publish
+    def _cells_to_path_msg(self, path_cells, ox, oy, res) -> 'Path':
+        """Convert list of (row,col) grid cells to a nav_msgs/Path."""
         path_msg = Path()
         path_msg.header.stamp = self.get_clock().now().to_msg()
         path_msg.header.frame_id = self.global_frame
@@ -188,22 +304,18 @@ class PlannerNode(Node):
             ps.pose.position.z = 0.0
             ps.pose.orientation.w = 1.0
             path_msg.poses.append(ps)
-
-        # Set orientations along path tangent for nicer display
+        # Orient each pose toward the next waypoint
         for i in range(len(path_msg.poses) - 1):
             p0 = path_msg.poses[i].pose.position
             p1 = path_msg.poses[i + 1].pose.position
             yaw = math.atan2(p1.y - p0.y, p1.x - p0.x)
-            q = _yaw_to_quaternion(yaw)
-            path_msg.poses[i].pose.orientation = q
+            path_msg.poses[i].pose.orientation = _yaw_to_quaternion(yaw)
         if len(path_msg.poses) >= 2:
             path_msg.poses[-1].pose.orientation = path_msg.poses[-2].pose.orientation
-
-        self._path_pub.publish(path_msg)
-        self._publish_debug_markers(path_cells, start_rc, goal_rc)
+        return path_msg
 
     # ------------------------------------------------------------------
-    # Planner dispatch
+    # Planner dispatch (single-planner mode)
     # ------------------------------------------------------------------
 
     def _run_planner(self, grid, start_rc, goal_rc, goal_x, goal_y):
@@ -361,6 +473,16 @@ class PlannerNode(Node):
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
+
+def _path_length(path_cells, resolution: float) -> float:
+    """Total Euclidean length of a cell-coordinate path converted to metres."""
+    total = 0.0
+    for i in range(len(path_cells) - 1):
+        dr = path_cells[i+1][0] - path_cells[i][0]
+        dc = path_cells[i+1][1] - path_cells[i][1]
+        total += math.hypot(dr, dc) * resolution
+    return total
+
 
 def _yaw_to_quaternion(yaw: float):
     from geometry_msgs.msg import Quaternion

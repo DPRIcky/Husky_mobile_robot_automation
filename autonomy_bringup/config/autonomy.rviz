@@ -54,19 +54,71 @@ Visualization Manager:
       Update Topic:
         Value: /a300_00000/map_updates
 
+    # ── Path displays ────────────────────────────────────────────────────────
+    # In compare_mode all 4 are visible; in single-planner mode only PlannedPath
+    # carries data (the others stay empty/hidden).
+
     - Class: rviz_default_plugins/Path
-      Name: PlannedPath
+      Name: "Path — A* (green)"
+      Enabled: true
+      Topic:
+        Value: /planned_path_astar
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 0; 220; 80
+      Alpha: 0.8
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.03}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Path — Hybrid-A* (cyan)"
+      Enabled: true
+      Topic:
+        Value: /planned_path_hybrid_astar
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 0; 200; 255
+      Alpha: 0.8
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.06}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Path — RRT* (orange)"
+      Enabled: true
+      Topic:
+        Value: /planned_path_rrtstar
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 255; 140; 0
+      Alpha: 0.8
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.09}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Path — SELECTED (white, robot follows)"
       Enabled: true
       Topic:
         Value: /planned_path
         Depth: 5
         Durability Policy: Volatile
         Reliability Policy: Reliable
-      Color: 0; 255; 0
+      Color: 255; 255; 255
       Alpha: 1.0
       Line Style: Lines
-      Line Width: 0.05
-      Offset: {X: 0, Y: 0, Z: 0.05}
+      Line Width: 0.07
+      Offset: {X: 0, Y: 0, Z: 0.12}
       Pose Style: None
       Buffer Length: 1
       Head Length: 0.05
