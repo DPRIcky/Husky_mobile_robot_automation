@@ -18,8 +18,8 @@ path_follower:
     use_sim_time: true
 
     # ── Controller selection ──────────────────────────────────────────────
-    controller_type: "stanley"        # stanley | pid | pure_pursuit | lqr | mpc
-    controller_compare_mode: false    # run all 5 and publish /controller_diagnostics
+    controller_type: "pid"        # stanley | pid | pure_pursuit | lqr | mpc
+    controller_compare_mode: true    # run all 5 and publish /controller_diagnostics
 
     # ── Shared motion limits ──────────────────────────────────────────────
     max_linear_vel: 0.4

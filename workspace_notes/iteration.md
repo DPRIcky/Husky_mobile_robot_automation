@@ -16,6 +16,7 @@
 - [Iteration 7](#iteration-7-obstacle-avoidance-parameter-tuning) — Mar 10, 2026 ✅ COMPLETE
 - [Iteration 8](#iteration-8-replanning-loop-fixes) — Mar 10, 2026 ✅ COMPLETE
 - [Iteration 9](#iteration-9-5-controller-architecture) — Mar 10, 2026 ✅ COMPLETE
+- [Iteration 10](#iteration-10-actual-trajectory-trace) — Mar 10, 2026 ✅ COMPLETE
 
 ---
 
@@ -658,3 +659,38 @@ path_follower  -->  /autonomous/cmd_vel
 1. E-stop (`/estop` Bool) — zero twist
 2. Teleop (`/a300_00000/joy_teleop/cmd_vel`) — overrides for `mux_teleop_timeout_s=0.5s`
 3. Autonomous (`/autonomous/cmd_vel`) — default
+
+---
+
+## Iteration 10: Actual Trajectory Trace
+
+**Date:** March 10, 2026
+**Status:** ✅ COMPLETE
+
+### Objective
+Visualise the actual path the robot followed alongside the reference planned path in RViz, so controller tracking performance can be assessed visually.
+
+### Changes Made
+
+#### `simple_motion_pkg/simple_motion_pkg/path_follower.py`
+- Added `_traj_pub` publisher on `/actual_trajectory` (`nav_msgs/Path`, frame `map`)
+- Added `_actual_traj` accumulator (`nav_msgs/Path`) capped at 2000 poses (`_traj_max_poses`)
+- Every control tick (when TF pose is available): appends current `PoseStamped` to `_actual_traj` and publishes
+- **Clear on new goal:** If the new path's endpoint is >0.5m from the previous goal, `_actual_traj.poses` is cleared. Trajectory persists across replans to the same goal — the detour is visible.
+- **Clear on new goal only**, never on replan to same goal — so you can see the full actual trajectory including any obstacle detours
+
+#### `autonomy_bringup/config/autonomy.rviz`
+Added two new Path displays:
+
+| Display | Topic | Colour | Line Width | Z offset |
+|---------|-------|--------|------------|----------|
+| Reference Path (white) | `/planned_path` | 255;255;255 | 0.04 | 0.12 m |
+| Actual Trajectory (yellow) | `/actual_trajectory` | 255;220;0 | 0.06 | 0.15 m |
+
+The Z offsets ensure both traces are visible above the map even when overlapping.
+
+### Behaviour Summary
+- **Yellow trace** = where the robot actually drove (updated live, 10 Hz)
+- **White trace** = the reference path from the planner
+- Trajectory is reset when a new destination is set; preserved on replan to same goal
+- Maximum 2000 poses buffered (~3 minutes at 10 Hz) — oldest dropped if exceeded

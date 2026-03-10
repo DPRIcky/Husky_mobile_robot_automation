@@ -1,6 +1,6 @@
 # Workspace Status & Component Overview
 
-**Last Updated:** March 10, 2026 (Iteration 9 complete)
+**Last Updated:** March 10, 2026 (Iteration 10 complete)
 **Project:** Clearpath A300 Autonomous Navigation System
 
 ---
@@ -10,7 +10,7 @@
 - **Robot:** Clearpath A300 (a300-00000)
 - **ROS Version:** ROS 2 Jazzy
 - **Main Goal:** Autonomous path planning and obstacle avoidance with multi-sensor fusion
-- **Current Status:** ✅ Iteration 9 complete | 5-controller architecture (Stanley/PID/PurePursuit/LQR/MPC), velocity profiler, twist_mux, compare mode
+- **Current Status:** ✅ Iteration 10 complete | Actual trajectory trace (yellow) + reference path (white) visualised side-by-side in RViz
 
 ---
 
@@ -91,9 +91,9 @@
 - **Recovery:** stuck detection (4s/0.15m), off-path detection (1.5m), `_waiting_for_replan` freeze, closest-waypoint start
 
 ### 8. **Autonomy Bringup** (`/autonomy_bringup`) — NEW
-**Status:** ✅ Complete (Iteration 9, Mar 10 2026)
+**Status:** ✅ Complete (Iteration 10, Mar 10 2026)
 - Unified launch: planner + path_follower + twist_mux + RViz
-- RViz config: Map, TF, RobotModel, 4 path displays (A*/Hybrid-A*/RRT*/Selected), LaserScan, Goal tool
+- RViz config: Map, TF, RobotModel, 4 planner paths (A*/Hybrid-A*/RRT*/Selected), LaserScan, Reference Path (white), **Actual Trajectory (yellow)**, Goal tool
 - Launch: `autonomy.launch.py`
 
 ---
@@ -148,7 +148,7 @@ ros2 run navigation waypoint_navigator --ros-args \
   -p mode:=loop
 ```
 
-**Full Autonomy Stack (Iteration 9):**
+**Full Autonomy Stack (Iteration 10):**
 ```bash
 # Build (one time after changes):
 cd /home/prajjwal/clearpath
@@ -210,7 +210,7 @@ map
 
 ## 📝 Ongoing Work
 
-### Current Iteration: 9 ✅ COMPLETE
+### Current Iteration: 10 ✅ COMPLETE
 - ✅ Navigation package structure created (Iter 1)
 - ✅ Nav2 configuration completed (Iter 1)
 - ✅ Aligned with official Clearpath packages (Iter 2)
@@ -236,6 +236,8 @@ map
 - ✅ Added velocity profiler: curvature + goal ramp + obstacle factor + accel limit (Iter 9)
 - ✅ Added twist_mux node: E-stop > teleop > autonomous arbitration (Iter 9)
 - ✅ Added compare mode: all 5 controllers run simultaneously, diagnostics on /controller_diagnostics (Iter 9)
+- ✅ Added actual trajectory trace: /actual_trajectory (yellow) vs reference path (white) in RViz (Iter 10)
+- ✅ Trajectory auto-clears on new goal; persists across replans to the same goal (Iter 10)
 
 ---
 
