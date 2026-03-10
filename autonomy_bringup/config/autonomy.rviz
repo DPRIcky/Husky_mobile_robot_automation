@@ -126,6 +126,38 @@ Visualization Manager:
       Shaft Length: 0.1
       Shaft Width: 0.01
 
+    - Class: rviz_default_plugins/Path
+      Name: "Reference Path (white, robot follows)"
+      Enabled: true
+      Topic:
+        Value: /planned_path
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 255; 255; 255
+      Alpha: 0.6
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.12}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Actual Trajectory (yellow)"
+      Enabled: true
+      Topic:
+        Value: /actual_trajectory
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 255; 220; 0
+      Alpha: 1.0
+      Line Style: Lines
+      Line Width: 0.06
+      Offset: {X: 0, Y: 0, Z: 0.15}
+      Pose Style: None
+      Buffer Length: 1
+
     - Class: rviz_default_plugins/MarkerArray
       Name: PlannerDebug
       Enabled: true

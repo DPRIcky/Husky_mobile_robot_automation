@@ -234,6 +234,12 @@ class PathFollower(Node):
         self._diag_pub = self.create_publisher(
             Float64MultiArray, '/controller_diagnostics', 10)
 
+        # Actual trajectory trace
+        self._traj_pub         = self.create_publisher(Path, '/actual_trajectory', 10)
+        self._actual_traj      = Path()
+        self._actual_traj.header.frame_id = self.global_frame
+        self._traj_max_poses   = 2000   # cap to avoid unbounded memory
+
         self._timer = self.create_timer(1.0 / rate, self._control_loop)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -257,6 +263,14 @@ class PathFollower(Node):
             self._path_idx = dists.index(min(dists))
         else:
             self._path_idx = 0
+
+        # Clear actual trajectory trace when the goal destination changes
+        # (keep it across replans to the same goal so the detour is visible)
+        new_goal = self._path[-1]
+        if (self._current_goal is None or
+                math.hypot(new_goal[0] - self._current_goal[0],
+                           new_goal[1] - self._current_goal[1]) > 0.5):
+            self._actual_traj.poses.clear()
 
         self._active       = True
         self._current_goal = self._path[-1]
@@ -384,6 +398,20 @@ class PathFollower(Node):
             self._stop()
             return
         rx, ry, ryaw = pose
+
+        # ── Record actual trajectory ─────────────────────────────────────
+        ps = PoseStamped()
+        ps.header.stamp    = now.to_msg()
+        ps.header.frame_id = self.global_frame
+        ps.pose.position.x = rx
+        ps.pose.position.y = ry
+        ps.pose.orientation.z = math.sin(ryaw / 2.0)
+        ps.pose.orientation.w = math.cos(ryaw / 2.0)
+        self._actual_traj.poses.append(ps)
+        if len(self._actual_traj.poses) > self._traj_max_poses:
+            self._actual_traj.poses.pop(0)
+        self._actual_traj.header.stamp = now.to_msg()
+        self._traj_pub.publish(self._actual_traj)
 
         # ── Stuck detection ──────────────────────────────────────────────
         if self._stuck_check_time is None:
