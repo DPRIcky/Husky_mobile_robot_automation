@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'path_follower = simple_motion_pkg.path_follower:main',
+            'twist_mux = simple_motion_pkg.twist_mux:main',
         ],
     },
 )

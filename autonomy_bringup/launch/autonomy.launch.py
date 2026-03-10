@@ -1,5 +1,5 @@
 """
-Bringup launch: starts the trajectory planner, path follower, and RViz.
+Bringup launch: starts the trajectory planner, path follower, twist_mux, and RViz.
 
 Prerequisites (run in separate terminals BEFORE this launch):
   1. Gazebo:     ros2 launch clearpath_gz simulation.launch.py setup_path:=/home/prajjwal/clearpath
@@ -7,7 +7,8 @@ Prerequisites (run in separate terminals BEFORE this launch):
 
 This launch file starts:
   - trajectory_planner (A* by default)
-  - path_follower      (P-controller toward waypoints)
+  - path_follower      (Stanley/PID/PurePursuit/LQR/MPC controller toward waypoints)
+  - twist_mux          (arbitrates between autonomous and teleop cmd_vel)
   - rviz2              (minimal config with map, path, TF, goal tool)
 """
 
@@ -70,6 +71,19 @@ def generate_launch_description():
             remappings=[
                 ('/tf', '/a300_00000/tf'),
                 ('/tf_static', '/a300_00000/tf_static'),
+            ],
+        ),
+
+        # ---- Twist multiplexer ----
+        Node(
+            package='simple_motion_pkg',
+            executable='twist_mux',
+            name='twist_mux',
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('launch_motion')),
+            parameters=[
+                LaunchConfiguration('motion_params'),
+                {'use_sim_time': LaunchConfiguration('use_sim_time')},
             ],
         ),
 

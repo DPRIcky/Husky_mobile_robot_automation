@@ -2,23 +2,65 @@
 path_follower:
   ros__parameters:
     path_topic: "/planned_path"
-    cmd_vel_topic: "/a300_00000/cmd_vel"
     base_frame: "base_link"
     global_frame: "map"
-    lookahead_distance: 0.5
-    max_linear_vel: 0.4
-    max_angular_vel: 1.0
-    kp_linear: 0.5
-    kp_angular: 1.5
     goal_tolerance: 0.25
     control_rate: 10.0
     scan_topic: "/a300_00000/sensors/lidar2d_0/scan"
     obstacle_warn_dist: 0.65      # slow to 50% speed within this distance (metres)
     obstacle_stop_dist: 0.40      # stop and replan within this distance (metres)
-    obstacle_check_angle: 0.698   # ±40 deg forward cone (radians) — wider to catch side obstacles
+    obstacle_check_angle: 0.698   # ±40 deg forward cone (radians)
     map_update_delay_s: 0.8       # wait for SLAM to update map before first replan
     replan_retry_s: 3.0           # retry replan if still blocked after this long
     stuck_check_interval_s: 4.0   # seconds between progress checks
     stuck_dist_threshold_m: 0.15  # min movement (m) to not be considered stuck
     off_path_dist_m: 1.5          # replan immediately if robot drifts this far from path
+    use_sim_time: true
+
+    # ── Controller selection ──────────────────────────────────────────────
+    controller_type: "stanley"        # stanley | pid | pure_pursuit | lqr | mpc
+    controller_compare_mode: false    # run all 5 and publish /controller_diagnostics
+
+    # ── Shared motion limits ──────────────────────────────────────────────
+    max_linear_vel: 0.4
+    max_angular_vel: 1.0
+    lookahead_distance: 0.5
+
+    # ── Stanley controller ────────────────────────────────────────────────
+    stanley_k: 1.0        # cross-track error gain
+    stanley_v_min: 0.1    # minimum speed for CTE term denominator (m/s)
+
+    # ── PID controller ────────────────────────────────────────────────────
+    pid_kp: 1.5
+    pid_ki: 0.05
+    pid_kd: 0.2
+    pid_windup_limit: 2.0   # anti-windup clamp (rad·s)
+    kp_linear: 0.5
+
+    # ── LQR controller ────────────────────────────────────────────────────
+    lqr_q_cte: 5.0    # state cost weight for cross-track error
+    lqr_q_he: 1.0     # state cost weight for heading error
+    lqr_r_w: 0.5      # control effort cost weight for ω
+
+    # ── MPC controller ────────────────────────────────────────────────────
+    mpc_horizon: 8           # prediction horizon (steps)
+    mpc_q_cte: 5.0           # stage cost weight for cross-track error
+    mpc_q_he: 1.0            # stage cost weight for heading error
+    mpc_r_v: 0.1             # stage cost weight for linear velocity
+    mpc_r_w: 0.5             # stage cost weight for angular velocity
+
+    # ── Velocity profiler ─────────────────────────────────────────────────
+    vp_curvature_gain: 3.0   # speed = v_max / (1 + gain * curvature)
+    vp_goal_ramp_dist: 1.5   # decelerate starting this far from goal (m)
+    vp_min_vel: 0.05          # floor speed while moving (m/s)
+    vp_accel_limit: 0.5       # max speed increase per second (m/s²)
+
+twist_mux:
+  ros__parameters:
+    mux_autonomous_topic: "/autonomous/cmd_vel"
+    mux_teleop_topic: "/a300_00000/joy_teleop/cmd_vel"
+    mux_output_topic: "/a300_00000/cmd_vel"
+    mux_teleop_timeout_s: 0.5
+    mux_rate_hz: 20.0
+    base_frame: "base_link"
     use_sim_time: true
