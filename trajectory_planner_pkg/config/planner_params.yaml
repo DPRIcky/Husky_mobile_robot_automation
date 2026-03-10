@@ -1,13 +1,36 @@
 # trajectory_planner_pkg default parameters
 trajectory_planner:
   ros__parameters:
-    planner_type: "astar"          # astar | hybrid_astar | rrt_star
+    # ── Planner selection ──────────────────────────────────────────────────────
+    # Options: "astar" | "hybrid_astar" | "rrt_star"
+    # Switch at launch: ros2 launch autonomy_bringup autonomy.launch.py planner_type:=rrt_star
+    planner_type: "astar"
+
+    # ── Topics / frames ───────────────────────────────────────────────────────
     map_topic: "/a300_00000/map"
     goal_topic: "/goal_pose"
     path_topic: "/planned_path"
     base_frame: "base_link"
     global_frame: "map"
-    inflation_radius_m: 0.40       # metres — robot half-width ~0.33m + margin
-    occupied_threshold: 85          # OccupancyGrid value >= this → obstacle (SLAM noise ~65-80, real obstacles = 100)
-    allow_unknown: true             # treat unknown cells (-1) as free
+
+    # ── Map processing ────────────────────────────────────────────────────────
+    inflation_radius_m: 0.40       # obstacle inflation (robot half-width ~0.33m + margin)
+    occupied_threshold: 85         # ≥85 → obstacle (SLAM noise is 65-80, real obstacles = 100)
+    allow_unknown: true            # treat unknown cells (-1) as free
+
+    # ── Hybrid-A* parameters (used when planner_type = hybrid_astar) ─────────
+    # Searches (x, y, heading) state space — respects robot turning constraints.
+    # Slower than A* but generates smoother, driveable paths.
+    hybrid_num_headings: 72        # discrete heading bins (360/72 = 5° resolution)
+    hybrid_step_size: 1.0          # step length in grid cells
+    hybrid_steer_angles: [-0.5, 0.0, 0.5]   # steering angles in radians
+
+    # ── RRT* parameters (used when planner_type = rrt_star) ──────────────────
+    # Probabilistic sampling — asymptotically optimal, handles complex spaces.
+    # Slower than A*; path quality improves with more iterations.
+    rrt_max_iter: 8000             # max tree nodes (increase for larger maps)
+    rrt_step_size: 5.0             # max extension per step (grid cells)
+    rrt_goal_sample_rate: 0.10     # probability of sampling goal directly (10%)
+    rrt_search_radius: 10.0        # rewiring neighbourhood radius (grid cells)
+
     use_sim_time: true

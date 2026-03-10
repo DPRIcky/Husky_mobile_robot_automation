@@ -66,33 +66,34 @@ def astar(grid: np.ndarray,
 # Hybrid-A*  (x, y, theta) with Reeds-Shepp-like discrete headings
 # ---------------------------------------------------------------------------
 
-_NUM_HEADINGS = 72          # 5-degree resolution
-_STEP_SIZE = 1.0            # grid cells per step
-_STEER_ANGLES = [-0.5, 0.0, 0.5]  # rad
-
-def _discretize_heading(theta: float) -> int:
-    return int(round(theta / (2.0 * math.pi) * _NUM_HEADINGS)) % _NUM_HEADINGS
-
 def hybrid_astar(grid: np.ndarray,
                  start: Tuple[int, int, float],
-                 goal: Tuple[int, int, float]) -> Optional[List[Tuple[float, float, float]]]:
+                 goal: Tuple[int, int, float],
+                 num_headings: int = 72,
+                 step_size: float = 1.0,
+                 steer_angles: list = None) -> Optional[List[Tuple[float, float, float]]]:
     """start/goal = (row, col, theta_rad). Returns list of (row, col, theta)."""
-    rows, cols = grid.shape
+    if steer_angles is None:
+        steer_angles = [-0.5, 0.0, 0.5]
 
+    rows, cols = grid.shape
     sr, sc, stheta = start
     gr, gc, gtheta = goal
     if grid[int(sr), int(sc)] != 0 or grid[int(gr), int(gc)] != 0:
         return None
 
+    def _disc(theta):
+        return int(round(theta / (2.0 * math.pi) * num_headings)) % num_headings
+
     open_set: list = []
-    sh = _discretize_heading(stheta)
+    sh = _disc(stheta)
     start_key = (int(sr), int(sc), sh)
     heapq.heappush(open_set, (0.0, start_key, (float(sr), float(sc), stheta)))
     came_from: dict = {}
     g_score = {start_key: 0.0}
 
     goal_tol_cells = 2.0
-    goal_tol_heading = 1  # discrete heading bins
+    goal_tol_heading = 1
 
     def heuristic(r, c):
         return math.hypot(r - gr, c - gc)
@@ -102,7 +103,7 @@ def hybrid_astar(grid: np.ndarray,
         cr, cc, ctheta = cur_state
 
         if (math.hypot(cr - gr, cc - gc) < goal_tol_cells and
-                abs(_discretize_heading(ctheta) - _discretize_heading(gtheta)) <= goal_tol_heading):
+                abs(_disc(ctheta) - _disc(gtheta)) <= goal_tol_heading):
             path = [(cr, cc, ctheta)]
             k = cur_key
             while k in came_from:
@@ -111,15 +112,15 @@ def hybrid_astar(grid: np.ndarray,
             path.reverse()
             return path
 
-        for steer in _STEER_ANGLES:
+        for steer in steer_angles:
             new_theta = ctheta + steer
-            nr = cr + _STEP_SIZE * math.cos(new_theta)
-            nc = cc + _STEP_SIZE * math.sin(new_theta)
+            nr = cr + step_size * math.cos(new_theta)
+            nc = cc + step_size * math.sin(new_theta)
             ri, ci = int(round(nr)), int(round(nc))
             if 0 <= ri < rows and 0 <= ci < cols and grid[ri, ci] == 0:
-                nh = _discretize_heading(new_theta)
+                nh = _disc(new_theta)
                 nkey = (ri, ci, nh)
-                tentative_g = g_score[cur_key] + _STEP_SIZE
+                tentative_g = g_score[cur_key] + step_size
                 if tentative_g < g_score.get(nkey, float('inf')):
                     g_score[nkey] = tentative_g
                     came_from[nkey] = (cur_key, (nr, nc, new_theta))

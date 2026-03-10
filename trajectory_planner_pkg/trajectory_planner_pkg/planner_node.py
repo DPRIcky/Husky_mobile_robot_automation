@@ -36,9 +36,17 @@ class PlannerNode(Node):
         self.declare_parameter('path_topic', '/planned_path')
         self.declare_parameter('base_frame', 'base_link')
         self.declare_parameter('global_frame', 'map')
-        self.declare_parameter('inflation_radius_m', 0.35)
-        self.declare_parameter('occupied_threshold', 65)
+        self.declare_parameter('inflation_radius_m', 0.40)
+        self.declare_parameter('occupied_threshold', 85)
         self.declare_parameter('allow_unknown', True)
+        # Hybrid-A* params
+        self.declare_parameter('hybrid_num_headings', 72)
+        self.declare_parameter('hybrid_step_size', 1.0)
+        # RRT* params
+        self.declare_parameter('rrt_max_iter', 8000)
+        self.declare_parameter('rrt_step_size', 5.0)
+        self.declare_parameter('rrt_goal_sample_rate', 0.10)
+        self.declare_parameter('rrt_search_radius', 10.0)
 
         self.planner_type = self.get_parameter('planner_type').value
         map_topic = self.get_parameter('map_topic').value
@@ -49,6 +57,12 @@ class PlannerNode(Node):
         self.inflation_radius_m = self.get_parameter('inflation_radius_m').value
         self.occupied_threshold = self.get_parameter('occupied_threshold').value
         self.allow_unknown = self.get_parameter('allow_unknown').value
+        self.hybrid_num_headings  = self.get_parameter('hybrid_num_headings').value
+        self.hybrid_step_size     = self.get_parameter('hybrid_step_size').value
+        self.rrt_max_iter         = self.get_parameter('rrt_max_iter').value
+        self.rrt_step_size        = self.get_parameter('rrt_step_size').value
+        self.rrt_goal_sample_rate = self.get_parameter('rrt_goal_sample_rate').value
+        self.rrt_search_radius    = self.get_parameter('rrt_search_radius').value
 
         self.get_logger().info(
             f'Planner starting — type={self.planner_type}, '
@@ -201,14 +215,21 @@ class PlannerNode(Node):
                 grid,
                 (start_rc[0], start_rc[1], start_yaw),
                 (goal_rc[0], goal_rc[1], goal_yaw),
+                num_headings=self.hybrid_num_headings,
+                step_size=self.hybrid_step_size,
             )
             if result is not None:
                 return [(int(round(r)), int(round(c))) for r, c, _ in result]
             return None
 
         elif self.planner_type == 'rrt_star':
-            return rrt_star(grid, start_rc, goal_rc,
-                            max_iter=8000, step_size=5.0)
+            return rrt_star(
+                grid, start_rc, goal_rc,
+                max_iter=self.rrt_max_iter,
+                step_size=self.rrt_step_size,
+                goal_sample_rate=self.rrt_goal_sample_rate,
+                search_radius=self.rrt_search_radius,
+            )
 
         else:  # 'astar' default
             return astar(grid, start_rc, goal_rc)
