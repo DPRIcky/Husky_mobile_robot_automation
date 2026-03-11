@@ -7,18 +7,19 @@ path_follower:
     goal_tolerance: 0.25
     control_rate: 10.0
     scan_topic: "/a300_00000/sensors/lidar2d_0/scan"
-    obstacle_warn_dist: 0.65      # slow to 50% speed within this distance (metres)
-    obstacle_stop_dist: 0.40      # stop and replan within this distance (metres)
+    obstacle_warn_dist: 0.80      # slow to 50% speed within this distance (metres)
+    obstacle_stop_dist: 0.50      # stop and replan (must be < inflation_radius_m=0.65)
     obstacle_check_angle: 0.698   # ±40 deg forward cone (radians)
-    map_update_delay_s: 0.8       # wait for SLAM to update map before first replan
-    replan_retry_s: 3.0           # retry replan if still blocked after this long
+    map_update_delay_s: 2.5       # wait for SLAM map update before replanning
+                                  # SLAM toolbox publishes at ~0.5-2 Hz; 2.5s ensures new scan is in map
+    replan_retry_s: 5.0           # retry replan if still blocked after this long
     stuck_check_interval_s: 4.0   # seconds between progress checks
     stuck_dist_threshold_m: 0.15  # min movement (m) to not be considered stuck
     off_path_dist_m: 1.5          # replan immediately if robot drifts this far from path
     use_sim_time: true
 
     # ── Controller selection ──────────────────────────────────────────────
-    controller_type: "stanley"       # stanley | pid | pure_pursuit | lqr | mpc
+    controller_type: "mpc"       # stanley | pid | pure_pursuit | lqr | mpc
     controller_compare_mode: true    # run all 5 and publish /controller_diagnostics
 
     # ── Shared motion limits ──────────────────────────────────────────────
@@ -28,7 +29,7 @@ path_follower:
 
     # ── Stanley controller ────────────────────────────────────────────────
     # Law: ω = he − atan2(k_e × cte, v).  cte>0 = robot LEFT → subtract to steer right.
-    stanley_k: 2.5      # cross-track gain (increased from 1.0 after bug-fix)
+    stanley_k: 3.0      # cross-track gain (increased from 1.0 after bug-fix)
     stanley_v_min: 0.1  # min speed for CTE denominator (m/s)
 
     # ── PID controller ────────────────────────────────────────────────────
