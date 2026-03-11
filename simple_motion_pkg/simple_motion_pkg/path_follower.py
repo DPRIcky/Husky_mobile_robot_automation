@@ -413,6 +413,29 @@ class PathFollower(Node):
         self._actual_traj.header.stamp = now.to_msg()
         self._traj_pub.publish(self._actual_traj)
 
+        # ── Heading alignment ────────────────────────────────────────────
+        # If the robot's heading is badly misaligned with the path (> 60°),
+        # spin in place before engaging any controller.  This handles the
+        # common case where the goal is behind the robot and the first path
+        # segment points ~180° opposite to the robot's current heading.
+        # All controllers reduce v to zero when |he| > 90° (via cos factor),
+        # but MPC can output w≈0 near he=±π due to gradient discontinuity.
+        _ALIGN_THRESH = math.radians(60)
+        if self._path_idx < len(self._path) - 1:
+            px0, py0 = self._path[self._path_idx]
+            px1, py1 = self._path[self._path_idx + 1]
+            path_head_now = math.atan2(py1 - py0, px1 - px0)
+            he_now = _normalize_angle(path_head_now - ryaw)
+            if abs(he_now) > _ALIGN_THRESH:
+                spin_cmd = TwistStamped()
+                spin_cmd.header.stamp    = now.to_msg()
+                spin_cmd.header.frame_id = self.base_frame
+                spin_cmd.twist.angular.z = float(
+                    math.copysign(self.max_w, he_now))
+                self._cmd_pub.publish(spin_cmd)
+                self._stuck_check_time = None   # reset — spinning is intentional
+                return
+
         # ── Stuck detection ──────────────────────────────────────────────
         if self._stuck_check_time is None:
             self._stuck_check_pose = (rx, ry)
