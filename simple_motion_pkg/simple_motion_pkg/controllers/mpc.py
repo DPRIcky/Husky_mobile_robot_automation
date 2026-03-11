@@ -113,17 +113,27 @@ class MPCController:
             ref_idx = min(start_idx + i, n_path - 1)
             rx_ref, ry_ref = path[ref_idx]
 
-            # Cross-track error (Euclidean; MPC minimises absolute deviation)
-            cte = math.hypot(x - rx_ref, y - ry_ref)
-
-            # Heading error vs path tangent
+            # Path tangent at reference
             if ref_idx < n_path - 1:
                 dxp = path[ref_idx + 1][0] - path[ref_idx][0]
                 dyp = path[ref_idx + 1][1] - path[ref_idx][1]
                 path_h = math.atan2(dyp, dxp)
+                mag    = math.hypot(dxp, dyp) + 1e-9
+                tx_n   = dxp / mag
+                ty_n   = dyp / mag
             else:
                 path_h = theta
-            he = abs(normalize_angle(path_h - theta))
+                tx_n   = math.cos(theta)
+                ty_n   = math.sin(theta)
+
+            # Signed cross-track error: positive = robot to LEFT of path
+            # (same convention as nearest_on_path)
+            ex  = x - rx_ref
+            ey  = y - ry_ref
+            cte = tx_n * ey - ty_n * ex
+
+            # Signed heading error: positive = path points LEFT of robot heading
+            he = normalize_angle(path_h - theta)
 
             cost += (self.Q_cte * cte ** 2
                      + self.Q_he * he  ** 2

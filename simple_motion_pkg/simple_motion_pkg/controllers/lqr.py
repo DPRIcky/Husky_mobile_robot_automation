@@ -1,15 +1,20 @@
 """
 LQR (Linear-Quadratic Regulator) path-following controller.
 
-State:   x = [cross_track_error e,  heading_error θ_e]
+State:   x = [cte, he]
 Input:   u = [ω]
 
-Linearised unicycle model about (v, 0):
-    ė  =  v · θ_e          (cte changes at rate v × heading_error)
-    θ̇_e =  ω               (heading error changes at rate ω)
+Sign conventions:
+    cte = nearest_on_path CTE → positive = robot to the LEFT of path
+    he  = path_heading − ryaw → positive = path points LEFT of robot heading
+    ω   > 0 → counterclockwise (left) turn
 
-Continuous:  A = [[0, v], [0, 0]]   B = [[0], [1]]
-Discretised: Ad = I + A·dt          Bd = B·dt
+Linearised unicycle (correct signs):
+    ĊTE = −v · he      (robot pointing left of path → he < 0 → cte increases)
+    ḣe  = −ω           (left turn increases ryaw → he = path_heading−ryaw decreases)
+
+Continuous:  A = [[0, −v], [0, 0]]   B = [[0], [−1]]
+Discretised: Ad = I + A·dt            Bd = B·dt
 
 Gain K is computed by solving the Discrete Algebraic Riccati Equation (DARE)
 and is recomputed whenever speed or dt changes significantly.
@@ -59,8 +64,8 @@ class LQRController:
             return
 
         v_eff = max(abs(v), 0.05)           # prevent singular A at v≈0
-        A  = np.array([[0.0, v_eff], [0.0, 0.0]])
-        B  = np.array([[0.0], [1.0]])
+        A  = np.array([[0.0, -v_eff], [0.0, 0.0]])  # ĊTE = -v·he
+        B  = np.array([[0.0], [-1.0]])               # ḣe  = -ω
         Ad = np.eye(2) + A * dt
         Bd = B * dt
 

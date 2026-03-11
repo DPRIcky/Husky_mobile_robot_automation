@@ -18,17 +18,18 @@ path_follower:
     use_sim_time: true
 
     # ── Controller selection ──────────────────────────────────────────────
-    controller_type: "pid"        # stanley | pid | pure_pursuit | lqr | mpc
+    controller_type: "stanley"       # stanley | pid | pure_pursuit | lqr | mpc
     controller_compare_mode: true    # run all 5 and publish /controller_diagnostics
 
     # ── Shared motion limits ──────────────────────────────────────────────
     max_linear_vel: 0.4
-    max_angular_vel: 1.0
-    lookahead_distance: 0.5
+    max_angular_vel: 1.2
+    lookahead_distance: 0.8   # larger = smoother; 0.8m @ 0.4m/s = 2s preview
 
     # ── Stanley controller ────────────────────────────────────────────────
-    stanley_k: 1.0        # cross-track error gain
-    stanley_v_min: 0.1    # minimum speed for CTE term denominator (m/s)
+    # Law: ω = he − atan2(k_e × cte, v).  cte>0 = robot LEFT → subtract to steer right.
+    stanley_k: 2.5      # cross-track gain (increased from 1.0 after bug-fix)
+    stanley_v_min: 0.1  # min speed for CTE denominator (m/s)
 
     # ── PID controller ────────────────────────────────────────────────────
     pid_kp: 1.5
@@ -38,22 +39,24 @@ path_follower:
     kp_linear: 0.5
 
     # ── LQR controller ────────────────────────────────────────────────────
-    lqr_q_cte: 5.0    # state cost weight for cross-track error
-    lqr_q_he: 1.0     # state cost weight for heading error
-    lqr_r_w: 0.5      # control effort cost weight for ω
+    # Model fixed: A=[[0,-v],[0,0]], B=[[0],[-1]] (correct signs for he=path_hdg−ryaw)
+    lqr_q_cte: 10.0   # state cost weight for cross-track error
+    lqr_q_he: 3.0     # state cost weight for heading error
+    lqr_r_w: 0.2      # control effort cost (smaller = allow more angular vel)
 
     # ── MPC controller ────────────────────────────────────────────────────
+    # Cost uses signed CTE (cross-product) and signed he — direction info for SLSQP.
     mpc_horizon: 8           # prediction horizon (steps)
-    mpc_q_cte: 5.0           # stage cost weight for cross-track error
-    mpc_q_he: 1.0            # stage cost weight for heading error
-    mpc_r_v: 0.1             # stage cost weight for linear velocity
-    mpc_r_w: 0.5             # stage cost weight for angular velocity
+    mpc_q_cte: 10.0          # stage cost weight for cross-track error
+    mpc_q_he: 3.0            # stage cost weight for heading error
+    mpc_r_v: 0.05            # minimal speed penalty (don't slow down unnecessarily)
+    mpc_r_w: 0.3             # angular velocity penalty (moderate damping)
 
     # ── Velocity profiler ─────────────────────────────────────────────────
     vp_curvature_gain: 3.0   # speed = v_max / (1 + gain * curvature)
     vp_goal_ramp_dist: 1.5   # decelerate starting this far from goal (m)
-    vp_min_vel: 0.05          # floor speed while moving (m/s)
-    vp_accel_limit: 0.5       # max speed increase per second (m/s²)
+    vp_min_vel: 0.05         # floor speed while moving (m/s)
+    vp_accel_limit: 0.5      # max speed increase per second (m/s²)
 
 twist_mux:
   ros__parameters:

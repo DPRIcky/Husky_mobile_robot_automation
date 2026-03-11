@@ -12,7 +12,7 @@ used by the P-controller.
 """
 
 import math
-from .utils import normalize_angle, advance_lookahead, signed_cte
+from .utils import normalize_angle, advance_lookahead, nearest_on_path, signed_cte
 
 
 class PurePursuitController:
@@ -29,7 +29,10 @@ class PurePursuitController:
         """
         Returns (v_cmd, w_cmd, cte, heading_error, new_path_idx).
         """
-        new_idx = advance_lookahead(rx, ry, path, path_idx, self.L)
+        # Find nearest waypoint first so lookahead is always ahead of robot,
+        # even when path_idx is stale (e.g. in compare mode with another active controller)
+        near_idx, _, _ = nearest_on_path(rx, ry, path, path_idx)
+        new_idx = advance_lookahead(rx, ry, path, near_idx, self.L)
         tx, ty  = path[new_idx]
 
         dx = tx - rx

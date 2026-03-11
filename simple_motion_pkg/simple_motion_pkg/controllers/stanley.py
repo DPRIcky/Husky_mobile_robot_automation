@@ -3,11 +3,18 @@ Stanley path-following controller.
 
 Reference: Thrun et al., "Stanley: The Robot that Won the DARPA Grand Challenge"
 
+Sign conventions (matching nearest_on_path in utils.py):
+    cte > 0  →  robot is to the LEFT  of the path tangent
+    he  > 0  →  path_heading > ryaw   →  path points LEFT of robot heading
+    w   > 0  →  counterclockwise (left) turn
+
 Control law:
     heading_error  = normalise(path_tangent_heading − robot_heading)
-    cross_track_error = signed perpendicular distance to nearest path segment
-                        (positive = robot is to the RIGHT of path)
-    ω = heading_error + atan2(k_e × cte, max(v, v_min))
+    cross_track_error = signed perpendicular distance (positive = robot LEFT of path)
+    ω = heading_error − atan2(k_e × cte, max(v, v_min))
+
+    The minus sign on the CTE term is essential: if robot is to the LEFT (cte > 0),
+    we need to steer RIGHT (negative ω contribution), hence subtract.
     v = v_desired × max(0, cos(heading_error))   — slow down for big misalignments
 """
 
@@ -35,8 +42,9 @@ class StanleyController:
         heading_error = normalize_angle(path_heading - ryaw)
 
         # Stanley steering law
+        # Subtract CTE term: cte > 0 = robot to LEFT → need right turn (negative ω)
         v_eff = max(abs(v), self.v_min)
-        w = heading_error + math.atan2(self.k_e * cte, v_eff)
+        w = heading_error - math.atan2(self.k_e * cte, v_eff)
         w = max(-self.max_w, min(self.max_w, w))
 
         # Speed: reduce proportionally to heading misalignment
