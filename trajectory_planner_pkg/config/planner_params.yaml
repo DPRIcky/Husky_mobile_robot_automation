@@ -24,10 +24,11 @@ trajectory_planner:
     # ── Map processing ────────────────────────────────────────────────────────
     inflation_radius_m: 0.65       # obstacle inflation (robot half-width ~0.33m + 0.32m safety; must be > obstacle_stop_dist)
     occupied_threshold: 85         # ≥85 → obstacle (SLAM noise is 65-80, real obstacles = 100)
-    allow_unknown: false           # IMPORTANT: treat unknown cells (-1) as obstacles.
-                                   # With allow_unknown=true the planner routes through uncharted
-                                   # space; robot hits unmapped physical obstacles. Set false so
-                                   # paths only go through areas SLAM has confirmed as free.
+    allow_unknown: true            # treat unknown cells (-1) as free.
+                                   # Must be true during active SLAM — at startup nearly the entire
+                                   # map is unknown and allow_unknown=false would block all planning.
+                                   # Physical obstacles in unknown areas are caught by the lidar stop
+                                   # in path_follower (obstacle_stop_dist=0.50m) rather than the planner.
 
     # ── Hybrid-A* parameters (used when planner_type = hybrid_astar) ─────────
     # Searches (x, y, heading) state space — respects robot turning constraints.
