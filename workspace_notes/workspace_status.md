@@ -1,6 +1,6 @@
 # Workspace Status & Component Overview
 
-**Last Updated:** March 10, 2026 (Iteration 10 complete)
+**Last Updated:** March 18, 2026 (Iteration 12 — Hybrid A* replanning failure fix)
 **Project:** Clearpath A300 Autonomous Navigation System
 
 ---
@@ -10,7 +10,7 @@
 - **Robot:** Clearpath A300 (a300-00000)
 - **ROS Version:** ROS 2 Jazzy
 - **Main Goal:** Autonomous path planning and obstacle avoidance with multi-sensor fusion
-- **Current Status:** ✅ Iteration 10 complete | Actual trajectory trace (yellow) + reference path (white) visualised side-by-side in RViz
+- **Current Status:** 🟡 Iteration 11 in progress; Iteration 12 complete — Hybrid A* no-path failure fixed with two-stage retry and finer steer angles
 
 ---
 
@@ -87,7 +87,7 @@
 - Publishes: `/autonomous/cmd_vel` (→ twist_mux → robot), `/controller_diagnostics`, `/goal_pose` (replan)
 - Config: `motion_params.yaml`
 - **Controller selection:** `controller_type` param (stanley/pid/pure_pursuit/lqr/mpc)
-- **Compare mode:** `controller_compare_mode: true` — all 5 run, diagnostics on `/controller_diagnostics`
+- **Compare mode:** optional; set `controller_compare_mode: true` to run all 5 and publish `/controller_diagnostics`
 - **Recovery:** stuck detection (4s/0.15m), off-path detection (1.5m), `_waiting_for_replan` freeze, closest-waypoint start
 
 ### 8. **Autonomy Bringup** (`/autonomy_bringup`) — NEW
@@ -210,7 +210,7 @@ map
 
 ## 📝 Ongoing Work
 
-### Current Iteration: 10 ✅ COMPLETE
+### Current Iteration: 11 🟡 IN PROGRESS
 - ✅ Navigation package structure created (Iter 1)
 - ✅ Nav2 configuration completed (Iter 1)
 - ✅ Aligned with official Clearpath packages (Iter 2)
@@ -238,6 +238,18 @@ map
 - ✅ Added compare mode: all 5 controllers run simultaneously, diagnostics on /controller_diagnostics (Iter 9)
 - ✅ Added actual trajectory trace: /actual_trajectory (yellow) vs reference path (white) in RViz (Iter 10)
 - ✅ Trajectory auto-clears on new goal; persists across replans to the same goal (Iter 10)
+- ✅ Iteration 11 audit identified sparse-path / lookahead progression coupling as the main tracking risk
+- ✅ Iteration 11 added replan-state fields to /path_follower_debug
+- ✅ Iteration 11 fixed advance_lookahead() so sparse paths do not target passed waypoints
+- ✅ Iteration 11 reduced planner shortcut smoothing from 80→5 to preserve trackable corner geometry
+- ✅ Iteration 11 changed obstacle cone heading to use local path tangent instead of far-goal direction
+- ✅ Iteration 11 restored non-debug motion defaults: Stanley active, controller compare mode off by default
+- ✅ Iteration 11 live-log diagnosis found backup/resume loops were preventing obstacle-triggered replans from firing
+- ✅ Iteration 11 fixed PID's lookahead-only blind spot by adding signed-CTE correction to the heading reference
+- ✅ Iteration 11 fixed MPC's stale warm-start reseed and restored `mpc_r_v` from `0.05` to `0.5`
+- ✅ Iteration 11 fixed near-goal curvature profiling on short replanned paths so MPC no longer treats them as straight at full speed
+- ✅ Iteration 11 added a soft clearance bias to replans so paths prefer extra distance from inflated obstacles without changing robot footprint
+- ✅ Iteration 12 fixed Hybrid A* no-path failure: finer steer angles (5 vs 3) + two-stage retry (drop clearance bias → un-inflated grid fallback)
 
 ---
 
@@ -249,4 +261,3 @@ map
 - [Navigation README](../navigation/README.md) - Detailed navigation setup
 - [System Overview](../SYSTEM_OVERVIEW.md) - Complete system architecture
 - [Engineering Log](../notes.md) - Original iteration notes
-

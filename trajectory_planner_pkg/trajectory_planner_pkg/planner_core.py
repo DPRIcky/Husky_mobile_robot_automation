@@ -10,13 +10,55 @@ import numpy as np
 from typing import List, Tuple, Optional
 
 
+def _cell_clearance_penalty(clearance_map: Optional[np.ndarray],
+                            cell: Tuple[int, int],
+                            preferred_clearance: float,
+                            weight: float) -> float:
+    """Softly penalize cells that lie too close to obstacles."""
+    if clearance_map is None or preferred_clearance <= 0.0 or weight <= 0.0:
+        return 0.0
+
+    clearance = float(clearance_map[cell[0], cell[1]])
+    if clearance >= preferred_clearance:
+        return 0.0
+
+    gap_ratio = (preferred_clearance - clearance) / max(preferred_clearance, 1e-6)
+    return weight * gap_ratio * gap_ratio
+
+
+def _edge_clearance_penalty(clearance_map: Optional[np.ndarray],
+                            start: Tuple[int, int],
+                            end: Tuple[int, int],
+                            preferred_clearance: float,
+                            weight: float) -> float:
+    """Average soft clearance penalty along an edge, scaled by edge length."""
+    if clearance_map is None or preferred_clearance <= 0.0 or weight <= 0.0:
+        return 0.0
+
+    r0, c0 = start
+    r1, c1 = end
+    dist = math.hypot(r1 - r0, c1 - c0)
+    steps = max(int(math.ceil(dist)), 1)
+    accum = 0.0
+    for i in range(steps + 1):
+        t = i / steps
+        ri = int(round(r0 + t * (r1 - r0)))
+        ci = int(round(c0 + t * (c1 - c0)))
+        accum += _cell_clearance_penalty(
+            clearance_map, (ri, ci), preferred_clearance, weight)
+    return (accum / (steps + 1)) * dist
+
+
 # ---------------------------------------------------------------------------
 # A* (grid-based, 8-connected)
 # ---------------------------------------------------------------------------
 
 def astar(grid: np.ndarray,
           start: Tuple[int, int],
-          goal: Tuple[int, int]) -> Optional[List[Tuple[int, int]]]:
+          goal: Tuple[int, int],
+          clearance_map: Optional[np.ndarray] = None,
+          preferred_clearance: float = 0.0,
+          clearance_weight: float = 0.0) -> Optional[List[Tuple[int, int]]]:
     """Return list of (row, col) from start to goal, or None if no path."""
     rows, cols = grid.shape
     if grid[start[0], start[1]] != 0 or grid[goal[0], goal[1]] != 0:
@@ -52,8 +94,10 @@ def astar(grid: np.ndarray,
             nr, nc = current[0] + dr, current[1] + dc
             if 0 <= nr < rows and 0 <= nc < cols and grid[nr, nc] == 0:
                 step = SQRT2 if (dr != 0 and dc != 0) else 1.0
-                tentative_g = g_score[current] + step
                 neighbour = (nr, nc)
+                penalty = _cell_clearance_penalty(
+                    clearance_map, neighbour, preferred_clearance, clearance_weight)
+                tentative_g = g_score[current] + step + penalty
                 if tentative_g < g_score.get(neighbour, float('inf')):
                     came_from[neighbour] = current
                     g_score[neighbour] = tentative_g
@@ -71,10 +115,13 @@ def hybrid_astar(grid: np.ndarray,
                  goal: Tuple[int, int, float],
                  num_headings: int = 72,
                  step_size: float = 1.0,
-                 steer_angles: list = None) -> Optional[List[Tuple[float, float, float]]]:
+                 steer_angles: list = None,
+                 clearance_map: Optional[np.ndarray] = None,
+                 preferred_clearance: float = 0.0,
+                 clearance_weight: float = 0.0) -> Optional[List[Tuple[float, float, float]]]:
     """start/goal = (row, col, theta_rad). Returns list of (row, col, theta)."""
     if steer_angles is None:
-        steer_angles = [-0.5, 0.0, 0.5]
+        steer_angles = [-0.5, -0.25, 0.0, 0.25, 0.5]
 
     rows, cols = grid.shape
     sr, sc, stheta = start
@@ -120,7 +167,9 @@ def hybrid_astar(grid: np.ndarray,
             if 0 <= ri < rows and 0 <= ci < cols and grid[ri, ci] == 0:
                 nh = _disc(new_theta)
                 nkey = (ri, ci, nh)
-                tentative_g = g_score[cur_key] + step_size
+                penalty = _cell_clearance_penalty(
+                    clearance_map, (ri, ci), preferred_clearance, clearance_weight)
+                tentative_g = g_score[cur_key] + step_size + penalty
                 if tentative_g < g_score.get(nkey, float('inf')):
                     g_score[nkey] = tentative_g
                     came_from[nkey] = (cur_key, (nr, nc, new_theta))
@@ -147,7 +196,10 @@ def rrt_star(grid: np.ndarray,
              max_iter: int = 5000,
              step_size: float = 5.0,
              goal_sample_rate: float = 0.1,
-             search_radius: float = 10.0) -> Optional[List[Tuple[int, int]]]:
+             search_radius: float = 10.0,
+             clearance_map: Optional[np.ndarray] = None,
+             preferred_clearance: float = 0.0,
+             clearance_weight: float = 0.0) -> Optional[List[Tuple[int, int]]]:
     """Return list of (row, col) from start to goal, or None."""
     rows, cols = grid.shape
     if grid[start[0], start[1]] != 0 or grid[goal[0], goal[1]] != 0:
@@ -200,13 +252,19 @@ def rrt_star(grid: np.ndarray,
         if not _collision_free(nearest.r, nearest.c, sr, sc):
             continue
 
-        new_node = _RRTNode(sr, sc, nearest.cost + math.hypot(sr - nearest.r, sc - nearest.c), nearest)
+        edge_cost = math.hypot(sr - nearest.r, sc - nearest.c)
+        edge_cost += _edge_clearance_penalty(
+            clearance_map, (nearest.r, nearest.c), (sr, sc),
+            preferred_clearance, clearance_weight)
+        new_node = _RRTNode(sr, sc, nearest.cost + edge_cost, nearest)
 
         # rewire (RRT*)
         for n in nodes:
             d2 = math.hypot(n.r - sr, n.c - sc)
             if d2 < search_radius and _collision_free(n.r, n.c, sr, sc):
-                new_cost = n.cost + d2
+                new_cost = n.cost + d2 + _edge_clearance_penalty(
+                    clearance_map, (n.r, n.c), (sr, sc),
+                    preferred_clearance, clearance_weight)
                 if new_cost < new_node.cost:
                     new_node.cost = new_cost
                     new_node.parent = n
@@ -216,7 +274,9 @@ def rrt_star(grid: np.ndarray,
         for n in nodes[:-1]:
             d2 = math.hypot(n.r - sr, n.c - sc)
             if d2 < search_radius and _collision_free(sr, sc, n.r, n.c):
-                new_cost = new_node.cost + d2
+                new_cost = new_node.cost + d2 + _edge_clearance_penalty(
+                    clearance_map, (sr, sc), (n.r, n.c),
+                    preferred_clearance, clearance_weight)
                 if new_cost < n.cost:
                     n.cost = new_cost
                     n.parent = new_node
@@ -225,6 +285,9 @@ def rrt_star(grid: np.ndarray,
         if math.hypot(sr - goal[0], sc - goal[1]) < step_size:
             if _collision_free(sr, sc, goal[0], goal[1]):
                 goal_cost = new_node.cost + math.hypot(sr - goal[0], sc - goal[1])
+                goal_cost += _edge_clearance_penalty(
+                    clearance_map, (sr, sc), goal,
+                    preferred_clearance, clearance_weight)
                 if best_goal_node is None or goal_cost < best_goal_node.cost:
                     best_goal_node = _RRTNode(goal[0], goal[1], goal_cost, new_node)
 

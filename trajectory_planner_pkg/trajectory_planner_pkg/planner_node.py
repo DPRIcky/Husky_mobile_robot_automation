@@ -17,6 +17,7 @@ Compare mode (compare_mode: true):
 import math
 import time
 import numpy as np
+from scipy.ndimage import distance_transform_edt
 
 import rclpy
 from rclpy.node import Node
@@ -51,6 +52,11 @@ class PlannerNode(Node):
         self.declare_parameter('inflation_radius_m', 0.40)
         self.declare_parameter('occupied_threshold', 85)
         self.declare_parameter('allow_unknown', True)
+        self.declare_parameter('clearance_bias_dist_m', 0.30)
+        self.declare_parameter('clearance_bias_weight', 1.0)
+        self.declare_parameter('replan_clearance_scale', 2.0)
+        self.declare_parameter('replan_goal_repeat_s', 10.0)
+        self.declare_parameter('replan_goal_tolerance_m', 0.20)
         # Hybrid-A* params
         self.declare_parameter('hybrid_num_headings', 72)
         self.declare_parameter('hybrid_step_size', 1.0)
@@ -71,6 +77,11 @@ class PlannerNode(Node):
         self.inflation_radius_m = self.get_parameter('inflation_radius_m').value
         self.occupied_threshold = self.get_parameter('occupied_threshold').value
         self.allow_unknown = self.get_parameter('allow_unknown').value
+        self.clearance_bias_dist_m   = self.get_parameter('clearance_bias_dist_m').value
+        self.clearance_bias_weight   = self.get_parameter('clearance_bias_weight').value
+        self.replan_clearance_scale  = self.get_parameter('replan_clearance_scale').value
+        self.replan_goal_repeat_s    = self.get_parameter('replan_goal_repeat_s').value
+        self.replan_goal_tolerance_m = self.get_parameter('replan_goal_tolerance_m').value
         self.hybrid_num_headings  = self.get_parameter('hybrid_num_headings').value
         self.hybrid_step_size     = self.get_parameter('hybrid_step_size').value
         self.rrt_max_iter         = self.get_parameter('rrt_max_iter').value
@@ -86,7 +97,12 @@ class PlannerNode(Node):
         # ---- State ----
         self._grid: np.ndarray | None = None
         self._grid_inflated: np.ndarray | None = None
+        self._clearance_map: np.ndarray | None = None
+        self._clearance_map_inflated: np.ndarray | None = None
         self._map_info = None  # OccupancyGrid.info
+        self._map_stamp = None  # ROS stamp of most-recent map
+        self._last_goal_xy = None
+        self._last_goal_time = None
 
         # ---- TF ----
         self._tf_buffer = tf2_ros.Buffer()
@@ -117,12 +133,16 @@ class PlannerNode(Node):
     # ------------------------------------------------------------------
 
     def _map_cb(self, msg: OccupancyGrid):
-        self._map_info = msg.info
+        self._map_info  = msg.info
+        self._map_stamp = msg.header.stamp
         self._grid = occupancy_grid_to_numpy(
             msg, self.occupied_threshold, self.allow_unknown)
         radius_cells = max(
             int(math.ceil(self.inflation_radius_m / msg.info.resolution)), 0)
         self._grid_inflated = inflate_grid(self._grid, radius_cells)
+        self._clearance_map = distance_transform_edt(self._grid == 0)
+        self._clearance_map_inflated = distance_transform_edt(
+            self._grid_inflated == 0)
         self.get_logger().info(
             f'Map received: {msg.info.width}x{msg.info.height}, '
             f'res={msg.info.resolution:.3f}m, '
@@ -133,7 +153,18 @@ class PlannerNode(Node):
             self.get_logger().warn('Goal received but no map available yet.')
             return
 
-        # Get start pose from TF
+        # Log map age so we can verify the map contains the latest obstacle scan
+        if self._map_stamp is not None:
+            map_age = (self.get_clock().now() -
+                       rclpy.time.Time.from_msg(self._map_stamp)).nanoseconds * 1e-9
+            if map_age > 5.0:
+                self.get_logger().warn(
+                    f'Map is {map_age:.1f}s old — obstacle may not be in map yet. '
+                    'Consider increasing map_update_delay_s.')
+            else:
+                self.get_logger().info(f'Planning on map aged {map_age:.2f}s')
+
+        # Get start pose from live TF (real-time robot localisation)
         start_xy = self._get_robot_xy()
         if start_xy is None:
             self.get_logger().error(
@@ -143,12 +174,13 @@ class PlannerNode(Node):
 
         goal_x = msg.pose.position.x
         goal_y = msg.pose.position.y
+        plan_now = self.get_clock().now()
 
         info = self._map_info
         ox, oy, res = info.origin.position.x, info.origin.position.y, info.resolution
 
         start_rc = world_to_grid(start_xy[0], start_xy[1], ox, oy, res)
-        goal_rc = world_to_grid(goal_x, goal_y, ox, oy, res)
+        goal_rc  = world_to_grid(goal_x, goal_y, ox, oy, res)
 
         rows, cols = self._grid_inflated.shape
         if not (0 <= start_rc[0] < rows and 0 <= start_rc[1] < cols):
@@ -158,12 +190,25 @@ class PlannerNode(Node):
             self.get_logger().error('Goal pose is outside the map bounds.')
             return
 
-        if self._grid_inflated[start_rc[0], start_rc[1]] != 0:
-            self.get_logger().warn(
-                'Start cell is inside inflated obstacle — trying un-inflated grid.')
-            grid = self._grid
-        else:
-            grid = self._grid_inflated
+        # Always plan on the inflated grid so the path respects robot width.
+        # If the robot's cell is inside the inflation zone (it backed up close to
+        # an obstacle), snap the start outward to the nearest free inflated cell.
+        grid = self._grid_inflated
+        clearance_map = self._clearance_map_inflated
+        if grid[start_rc[0], start_rc[1]] != 0:
+            snapped_start = self._nearest_free_cell(grid, start_rc)
+            if snapped_start is not None:
+                self.get_logger().warn(
+                    f'Start cell {start_rc} inside inflated obstacle — '
+                    f'snapped to {snapped_start}')
+                start_rc = snapped_start
+            else:
+                # Extreme case: robot fully surrounded — last resort fallback
+                self.get_logger().warn(
+                    'Start cell inside inflated obstacle, no nearby free cell — '
+                    'falling back to un-inflated grid.')
+                grid = self._grid
+                clearance_map = self._clearance_map
 
         # Snap goal to nearest free cell if it falls inside the inflated zone
         if grid[goal_rc[0], goal_rc[1]] != 0:
@@ -177,20 +222,81 @@ class PlannerNode(Node):
                 f'snapped to {snapped}')
             goal_rc = snapped
 
+        is_repeat_goal = False
+        if self._last_goal_xy is not None and self._last_goal_time is not None:
+            same_goal = math.hypot(
+                goal_x - self._last_goal_xy[0],
+                goal_y - self._last_goal_xy[1]) <= self.replan_goal_tolerance_m
+            since_goal = (plan_now - self._last_goal_time).nanoseconds * 1e-9
+            is_repeat_goal = same_goal and since_goal <= self.replan_goal_repeat_s
+
+        preferred_clearance = self.clearance_bias_dist_m / max(res, 1e-6)
+        clearance_weight = self.clearance_bias_weight
+        if is_repeat_goal:
+            clearance_weight *= self.replan_clearance_scale
+
+        if clearance_weight > 0.0 and preferred_clearance > 0.0:
+            mode = 'replan' if is_repeat_goal else 'goal'
+            self.get_logger().info(
+                f'Clearance bias ({mode}): '
+                f'pref={self.clearance_bias_dist_m:.2f}m  weight={clearance_weight:.2f}')
+
+        self._last_goal_xy = (goal_x, goal_y)
+        self._last_goal_time = plan_now
+
         if self.compare_mode:
-            self._plan_compare(grid, start_rc, goal_rc, start_xy, goal_x, goal_y, ox, oy, res)
+            self._plan_compare(
+                grid, start_rc, goal_rc, start_xy, goal_x, goal_y, ox, oy, res,
+                clearance_map, preferred_clearance, clearance_weight)
         else:
             self.get_logger().info(
                 f'Planning {self.planner_type}: '
                 f'start=({start_xy[0]:.2f},{start_xy[1]:.2f}) → '
                 f'goal=({goal_x:.2f},{goal_y:.2f})')
-            path_cells = self._run_planner(grid, start_rc, goal_rc, goal_x, goal_y)
+            path_cells = self._run_planner(
+                grid, start_rc, goal_rc, goal_x, goal_y,
+                clearance_map, preferred_clearance, clearance_weight)
+
+            # Retry 1: drop clearance bias — tight corridors are blocked by the
+            # penalty when the robot is already flush against an obstacle.
+            if path_cells is None and clearance_weight > 0.0:
+                self.get_logger().warn(
+                    'Planner failed — retrying without clearance bias …')
+                path_cells = self._run_planner(
+                    grid, start_rc, goal_rc, goal_x, goal_y,
+                    clearance_map, 0.0, 0.0)
+
+            # Retry 2: un-inflated grid — robot centre may have a free path even
+            # if the inflated footprint clips an obstacle cell.
+            if path_cells is None and grid is self._grid_inflated:
+                self.get_logger().warn(
+                    'Planner failed — retrying on un-inflated grid …')
+                raw_start = world_to_grid(start_xy[0], start_xy[1], ox, oy, res)
+                raw_goal  = world_to_grid(goal_x, goal_y, ox, oy, res)
+                raw_grid  = self._grid
+                raw_cm    = self._clearance_map
+                if raw_grid[raw_start[0], raw_start[1]] != 0:
+                    snapped = self._nearest_free_cell(raw_grid, raw_start)
+                    if snapped:
+                        raw_start = snapped
+                if raw_grid[raw_goal[0], raw_goal[1]] != 0:
+                    snapped = self._nearest_free_cell(raw_grid, raw_goal)
+                    if snapped:
+                        raw_goal = snapped
+                if (raw_grid[raw_start[0], raw_start[1]] == 0 and
+                        raw_grid[raw_goal[0], raw_goal[1]] == 0):
+                    path_cells = self._run_planner(
+                        raw_grid, raw_start, raw_goal, goal_x, goal_y,
+                        raw_cm, 0.0, 0.0)
+                    if path_cells is not None:
+                        grid = raw_grid  # use raw grid for smoothing step
+
             if path_cells is None:
                 self.get_logger().warn('Planner found NO path.')
                 self._publish_debug_markers([], start_rc, goal_rc)
                 return
             path_cells = prune_collinear(path_cells)
-            path_cells = shortcut_smooth(path_cells, grid, iterations=80)
+            path_cells = shortcut_smooth(path_cells, grid, iterations=5)
             self.get_logger().info(f'Path found: {len(path_cells)} waypoints')
             self._path_pub.publish(
                 self._cells_to_path_msg(path_cells, ox, oy, res))
@@ -200,7 +306,9 @@ class PlannerNode(Node):
     # Compare mode — run all 3, publish each, select best for robot
     # ------------------------------------------------------------------
 
-    def _plan_compare(self, grid, start_rc, goal_rc, start_xy, goal_x, goal_y, ox, oy, res):
+    def _plan_compare(self, grid, start_rc, goal_rc, start_xy, goal_x, goal_y,
+                      ox, oy, res, clearance_map, preferred_clearance,
+                      clearance_weight):
         self.get_logger().info(
             f'COMPARE MODE — running A*, Hybrid-A*, RRT* '
             f'start=({start_xy[0]:.2f},{start_xy[1]:.2f}) → '
@@ -213,10 +321,14 @@ class PlannerNode(Node):
 
         # ── A* ──────────────────────────────────────────────────────────
         t0 = time.monotonic()
-        p = astar(grid, start_rc, goal_rc)
+        p = astar(
+            grid, start_rc, goal_rc,
+            clearance_map=clearance_map,
+            preferred_clearance=preferred_clearance,
+            clearance_weight=clearance_weight)
         t_astar = time.monotonic() - t0
         if p:
-            p = shortcut_smooth(prune_collinear(p), grid, iterations=80)
+            p = shortcut_smooth(prune_collinear(p), grid, iterations=5)
             results['astar'] = (p, t_astar, _path_length(p, res))
             self._path_pub_astar.publish(self._cells_to_path_msg(p, ox, oy, res))
         else:
@@ -235,11 +347,14 @@ class PlannerNode(Node):
             (goal_rc[0],  goal_rc[1],  goal_yaw),
             num_headings=self.hybrid_num_headings,
             step_size=self.hybrid_step_size,
+            clearance_map=clearance_map,
+            preferred_clearance=preferred_clearance,
+            clearance_weight=clearance_weight,
         )
         t_hybrid = time.monotonic() - t0
         if p:
             p = [(int(round(r)), int(round(c))) for r, c, _ in p]
-            p = shortcut_smooth(prune_collinear(p), grid, iterations=80)
+            p = shortcut_smooth(prune_collinear(p), grid, iterations=5)
             results['hybrid_astar'] = (p, t_hybrid, _path_length(p, res))
             self._path_pub_hybrid.publish(self._cells_to_path_msg(p, ox, oy, res))
         else:
@@ -258,10 +373,13 @@ class PlannerNode(Node):
             step_size=self.rrt_step_size,
             goal_sample_rate=self.rrt_goal_sample_rate,
             search_radius=self.rrt_search_radius,
+            clearance_map=clearance_map,
+            preferred_clearance=preferred_clearance,
+            clearance_weight=clearance_weight,
         )
         t_rrt = time.monotonic() - t0
         if p:
-            p = shortcut_smooth(prune_collinear(p), grid, iterations=80)
+            p = shortcut_smooth(prune_collinear(p), grid, iterations=5)
             results['rrtstar'] = (p, t_rrt, _path_length(p, res))
             self._path_pub_rrt.publish(self._cells_to_path_msg(p, ox, oy, res))
         else:
@@ -318,7 +436,8 @@ class PlannerNode(Node):
     # Planner dispatch (single-planner mode)
     # ------------------------------------------------------------------
 
-    def _run_planner(self, grid, start_rc, goal_rc, goal_x, goal_y):
+    def _run_planner(self, grid, start_rc, goal_rc, goal_x, goal_y,
+                     clearance_map, preferred_clearance, clearance_weight):
         if self.planner_type == 'hybrid_astar':
             start_yaw = self._get_robot_yaw() or 0.0
             goal_yaw = math.atan2(goal_rc[0] - start_rc[0],
@@ -329,6 +448,9 @@ class PlannerNode(Node):
                 (goal_rc[0], goal_rc[1], goal_yaw),
                 num_headings=self.hybrid_num_headings,
                 step_size=self.hybrid_step_size,
+                clearance_map=clearance_map,
+                preferred_clearance=preferred_clearance,
+                clearance_weight=clearance_weight,
             )
             if result is not None:
                 return [(int(round(r)), int(round(c))) for r, c, _ in result]
@@ -341,10 +463,17 @@ class PlannerNode(Node):
                 step_size=self.rrt_step_size,
                 goal_sample_rate=self.rrt_goal_sample_rate,
                 search_radius=self.rrt_search_radius,
+                clearance_map=clearance_map,
+                preferred_clearance=preferred_clearance,
+                clearance_weight=clearance_weight,
             )
 
         else:  # 'astar' default
-            return astar(grid, start_rc, goal_rc)
+            return astar(
+                grid, start_rc, goal_rc,
+                clearance_map=clearance_map,
+                preferred_clearance=preferred_clearance,
+                clearance_weight=clearance_weight)
 
     # ------------------------------------------------------------------
     # Helpers

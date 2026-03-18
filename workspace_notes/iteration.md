@@ -17,6 +17,8 @@
 - [Iteration 8](#iteration-8-replanning-loop-fixes) — Mar 10, 2026 ✅ COMPLETE
 - [Iteration 9](#iteration-9-5-controller-architecture) — Mar 10, 2026 ✅ COMPLETE
 - [Iteration 10](#iteration-10-actual-trajectory-trace) — Mar 10, 2026 ✅ COMPLETE
+- [Iteration 11](#iteration-11-systematic-audit--debug-instrumentation) — Mar 16, 2026 🟡 IN PROGRESS
+- [Iteration 12](#iteration-12-hybrid-a-replanning-failure-fix) — Mar 18, 2026 ✅ COMPLETE
 
 ---
 
@@ -110,7 +112,7 @@
 ## Iteration 2: Align with Official Clearpath Packages
 
 **Date Range:** March 7, 2026 - [ongoing]  
-**Status:** 🟡 IN PROGRESS
+**Status:** 🟡 IN PROGRESS (minimal fixes applied; live ROS validation still pending)
 
 ### Key Discovery
 **🔴 CRITICAL UPDATE:** User identified that official Clearpath packages should be used instead of custom configuration:
@@ -601,7 +603,7 @@ Added `_waiting_for_replan: bool`. Set to `True` in `_publish_replan()`. Cleared
 | File | Changes |
 |------|---------|
 | `path_follower.py` | Complete rewrite — controller dispatch, compare mode, `/autonomous/cmd_vel` output |
-| `motion_params.yaml` | All controller + profiler + twist_mux params; default `controller_type: mpc`, `controller_compare_mode: true` |
+| `motion_params.yaml` | All controller + profiler + twist_mux params; current runtime defaults use `controller_type: stanley`, `controller_compare_mode: false` |
 | `setup.py` | Added `twist_mux` console_scripts entry |
 | `autonomy.launch.py` | Added twist_mux node |
 
@@ -694,3 +696,303 @@ The Z offsets ensure both traces are visible above the map even when overlapping
 - **White trace** = the reference path from the planner
 - Trajectory is reset when a new destination is set; preserved on replan to same goal
 - Maximum 2000 poses buffered (~3 minutes at 10 Hz) — oldest dropped if exceeded
+
+
+---
+
+## Iteration 11: Systematic Audit & Debug Instrumentation
+
+**Date:** March 16, 2026
+**Status:** 🟡 IN PROGRESS (minimal fixes applied; live ROS validation still pending)
+
+### Objective
+Systematic root-cause audit of (A) poor path following and (B) obstacle avoidance failures.
+No broad refactors — instrumentation and diagnosis first.
+
+### Audit Findings
+
+#### Bug 1 — `nearest_on_path` docstring sign inversion (documentation only)
+`utils.py:34`: docstring said "positive = robot to the RIGHT". Actual formula (`tx_n·ey − ty_n·ex`) yields positive = robot to the LEFT (standard 2-D cross product). All controllers (Stanley, LQR, MPC) already assumed LEFT=positive. **Code is correct; docstring was wrong.** Fixed in this iteration.
+
+#### Bug 2 — `shortcut_smooth(iterations=80)` too aggressive (HIGH CONFIDENCE)
+`planner_node.py:217,243,267,289`: 80 random-shortcut iterations on an already-pruned path can reduce a 200-cell path to 3–5 waypoints. Consequences:
+- Waypoints 2–5m apart → CTE discontinuities at corner transitions
+- `_menger_curvature(window=6)` samples the same waypoint 3× → reports κ=0 → no speed reduction at corners
+- Obstacle-cone direction `path_idx+5` almost always lands at the goal → cone misaimed
+Validated in a synthetic corridor audit: 48 raw A* points → 9 pruned → 4 after 80 smoothing iterations.
+
+#### Bug 3 — PID could go nearly blind to large lateral error near corners (HIGH CONFIDENCE)
+`pid.py:45`: error signal used only `desired_yaw − ryaw` to the lookahead waypoint. On corner-entry poses where the robot was still far off the local segment, the lookahead bearing could already point almost straight at the next waypoint, so PID reported a tiny heading error and stopped steering meaningfully even with large CTE.
+
+#### Bug 4 — 0.15m buffer between inflation_radius and stop_dist is too tight (MEDIUM)
+`inflation_radius_m=0.65m`, `obstacle_stop_dist=0.50m`. CTE ≥ 0.15m at corners (common with sparse paths) brings robot inside stop_dist → false obstacle stop → backup+replan loop.
+
+#### Bug 5 — RRT* collision checking not implicated
+Current `planner_core.py` checks the full segment inside `_collision_free()`. No RRT* patch was needed for this task.
+
+### Debug Instrumentation Added
+
+#### `/path_follower_debug` topic (Float64MultiArray, 10 Hz)
+Layout:
+```
+[v_desired, v_cmd, v_final,
+ w_cmd, w_final,
+ cte, he_deg,
+ forward_min, cone_center_deg,
+ path_idx, near_idx, n_waypoints, avg_wp_spacing_m,
+ blocked_since_s, waiting_for_replan, backing_up,
+ replan_requested, stuck_detected, off_path_detected]
+```
+
+#### Throttled structured log (1 Hz)
+```
+[DBG] mpc         near= 3  tgt= 3/ 5  cte=+0.021m  he= +2.3°  v=0.35→0.35→0.35  w=+0.05→+0.05  obs=2.10m(cone=+12°)  avg_sp=0.52m  flags=---|---|RPL|---|---|---
+```
+
+#### Path geometry log on every new path (`_path_cb`)
+```
+New path: 5 wp  start=wp0  avg_spacing=0.52m  max_spacing=1.10m  ctrl=mpc
+```
+
+### Evidence Gathered
+
+#### Evidence 1 — `advance_lookahead()` could select a waypoint behind the robot
+Synthetic sparse-path check (`lookahead_distance=0.8 m`):
+- Pose `(5.0, 0.0)` on path `[(0,0),(2,0),(4,0),(6,0),(6,2),…]`
+- `nearest_on_path()` returned waypoint 2 `(4,0)`
+- Old `advance_lookahead()` also returned waypoint 2 because distance to `(4,0)` was `1.0 m >= lookahead`
+- Result: PID / Pure Pursuit / MPC were allowed to target a point the robot had already passed
+
+This is a correctness bug in target progression, not a tuning issue.
+
+#### Evidence 2 — `shortcut_smooth(iterations=80)` collapsed corner paths too far
+On a synthetic L-corridor A* path:
+- Raw A* path: `48` points
+- After `prune_collinear()`: `9` points
+- After `shortcut_smooth(..., 80)`: `4` points
+- After `shortcut_smooth(..., 5)`: `8` points
+
+This matters because the 4-point path broke downstream follower assumptions:
+- cone heading `path_idx+5` pointed toward the goal instead of the local segment
+- `_menger_curvature(window=6)` returned `0.0` at every index on the 4-point path
+- with 5 smoothing iterations, curvature remained non-zero on the corner-approach waypoints
+
+#### Evidence 3 — Obstacle cone heading was using far-goal direction on sparse paths
+Examples from synthetic sparse paths:
+- sparse L-path at index 2: old cone heading `71.6°`, local path tangent `0.0°`
+- 4-point planner-like path at index 0: old cone heading `43.0°`, local tangent `9.5°`
+
+This means the forward obstacle metric could be computed in the wrong direction even when the raw scan itself was valid.
+
+#### Evidence 4 — checked-in runtime config was still a debug controller setup
+`motion_params.yaml` was shipping with:
+- `controller_type: "pid"`
+- `controller_compare_mode: true`
+
+That is useful for diagnostics, but it is not a good default for obstacle runs. In a simple L-turn follower simulation with the current parameters plus the path-follower heading-alignment logic:
+- Stanley reached the goal with max CTE ≈ `0.20 m`
+- LQR reached the goal with max CTE ≈ `0.20 m`
+- PID reached the goal but with max CTE ≈ `0.76 m`
+- Pure Pursuit reached with max CTE ≈ `0.74 m`
+- MPC stalled in this setup
+
+For obstacle avoidance, the lower-CTE baseline matters because the robot is less likely to cut toward nearby obstacles while following the replanned path.
+
+#### Evidence 5 — live terminal logs showed backup/resume loops that never reached replan delay
+From the running autonomy stack on March 16, 2026:
+- obstacle hits occurred repeatedly at `0.45–0.47 m`
+- each hit triggered `reversing 1.0s then waiting for map update`
+- about `1.1–1.3 s` later the log said `Path clear — resuming`
+- `map_update_delay_s` was `2.5 s`
+
+So the backup moved the robot just far enough to leave `stop_dist`, which cleared `_blocked_since` before the follower ever reached the replan delay. The robot then resumed the same still-bad path and hit the obstacle again.
+
+This is a state-machine correctness bug, not an inflation/footprint problem.
+
+#### Evidence 6 — live run with MPC did eventually replan, but MPC then stalled on the replanned path
+After repeated backup/resume loops, the log showed:
+- `Stuck: moved 0.03m in 4.9s — replanning.`
+- planner replanned successfully on a fresh map (`Planning on map aged 0.40s`, `Path found: 16 waypoints`)
+
+But after the new path arrived, MPC repeatedly produced logs like:
+- `v=0.21→0.00→0.00`
+- `w=-1.20→-1.20`
+- `obs=2.88m`
+
+So the remaining behavior in that run was:
+1. obstacle handling delayed the replan too long, then
+2. MPC did not execute the replanned path effectively even with clear obstacle distance
+
+#### Evidence 7 — compare-mode logs isolated the PID and MPC controller-specific failures
+From the live PID compare-mode run (`python3_6615_1773679162264.log`):
+- at one corner pose, PID reported `cte=+0.575 m`, `he=+2.4°`, `w=+0.024 rad/s`
+- on the same pose, Stanley reported `he=+53.8°`
+- this means the lookahead-point bearing hid the fact that the robot was still far off the local path segment
+
+Local replay of a similar corner-entry pose `(5.2, 0.8, 11°)` confirmed the same blind spot:
+- old PID heading error was only `+0.3°`
+- adding a signed-CTE heading correction reduced CTE from `0.80 m` to `0.10 m` within 25 control steps; the old behavior only reduced it to about `0.22 m`
+
+The same live compare-mode log also showed MPC repeatedly falling into zero-speed spin states on the corner approach:
+- examples: `v=0.000`, `w=-1.200`, `cte≈0.10–0.23 m`, `he≈-30° to -52°`
+- this matched the active-MPC obstacle run, where the replanned path was clear (`obs=2.88 m`) but the controller still stalled
+- the checked-in config was also overriding the controller's built-in `mpc_r_v=0.5` default with `0.05`, which weakens forward-progress bias exactly where the solver needs it most
+
+#### Evidence 8 — curvature profiling was dropping to zero near the end of short replanned paths
+From the current live MPC run (`python3_21843_1773687417147.log`):
+- MPC stayed on a `16` waypoint replanned path with `near=10`, `tgt=12/16`
+- `he` stayed large (`-30°` to `-55°`) while `v_desired` often stayed pinned at `0.40 m/s`
+- repeated obstacle-triggered replans followed until a much shorter `6` waypoint path finally reached the goal
+
+Root cause in `velocity_profiler.py`:
+- `_menger_curvature(idx=12, window=6, n=16)` chose `mid=15`, `end=15`
+- that duplicated the last waypoint, making the curvature denominator collapse and returning `0.0`
+- result: short curved replans near the goal were falsely treated as straight, so MPC was allowed to keep attacking them at max speed
+
+Local replay of a 16-point replanned-path fragment reproduced the exact failure:
+- old profiler outputs near the bend: `idx 12 -> v_desired 0.40`, `idx 13 -> v_desired 0.40`
+- patched profiler outputs: `idx 12 -> 0.10`, `idx 13 -> 0.08`
+
+#### Evidence 9 — planner paths were still willing to hug obstacle boundaries on replans
+User-requested mitigation: keep replanned paths a bit farther from obstacle boundaries so false-positive LiDAR returns are less likely to stop the robot while it is otherwise on a valid path.
+
+Rather than rewriting the stack or inflating the robot footprint further, I added a soft clearance preference inside the existing planners:
+- compute a distance-to-obstacle field on the current planning grid
+- penalize free cells that lie within a preferred soft-clearance band
+- apply a stronger penalty when the same goal is requested again within a short window, which is a good proxy for obstacle-triggered replanning in the current architecture
+
+Synthetic A* check on a grid with two valid routes around an obstacle:
+- plain A*: path length `28.73`, minimum clearance `1.0` cell
+- clearance-biased A*: path length `34.14`, minimum clearance `3.61` cells
+
+This is a mitigation for noisy/faulty obstacle sensing, not proof that the LiDAR false positives are solved at the source.
+
+### Minimal Patches Applied
+
+#### Patch 1 — fix lookahead progression correctness
+- File: `simple_motion_pkg/simple_motion_pkg/controllers/utils.py`
+- Change: `advance_lookahead()` now skips waypoints the robot has already passed along the current segment before applying the distance test
+- Why: prevents PID / Pure Pursuit / MPC from targeting behind-robot waypoints on sparse paths
+
+#### Patch 2 — keep planner smoothing but stop over-collapsing corner geometry
+- File: `trajectory_planner_pkg/trajectory_planner_pkg/planner_node.py`
+- Change: reduced `shortcut_smooth()` iterations from `80` to `5`
+- Why: preserves local corner geometry and usable curvature cues without removing pruning/smoothing from the architecture
+
+#### Patch 3 — obstacle cone uses local path tangent, not far-goal heading
+- File: `simple_motion_pkg/simple_motion_pkg/path_follower.py`
+- Change: cone center now comes from `nearest_on_path()` local tangent instead of `path_idx + 5`
+- Why: keeps the follower’s forward obstacle metric aligned with the segment currently being tracked
+
+#### Patch 4 — extend debug observability for replan/state diagnosis
+- File: `simple_motion_pkg/simple_motion_pkg/path_follower.py`
+- Change: `/path_follower_debug` now appends `replan_requested`, `stuck_detected`, and `off_path_detected`; 1 Hz log now prints `near` and `tgt` indices explicitly
+- Why: distinguishes target-progression bugs from state-machine / obstacle-detection faults
+
+#### Patch 5 — preserve obstacle-replan state across new paths
+- File: `simple_motion_pkg/simple_motion_pkg/path_follower.py`
+- Change: `_path_cb()` no longer clears obstacle replan state while the scan is still blocked
+- Why: prevents obstacle replans from restarting as if the obstacle had disappeared just because a new path arrived
+
+#### Patch 6 — restore a non-debug default controller configuration
+- File: `simple_motion_pkg/config/motion_params.yaml`
+- Change: default `controller_type` set to `stanley` and `controller_compare_mode` set to `false`
+- Why: the full autonomy launch from `workspace_status.md` should not come up in a PID + compare-mode debugging configuration by default
+
+#### Patch 7 — obstacle stop now commits to replan even if backup briefly clears stop distance
+- File: `simple_motion_pkg/simple_motion_pkg/path_follower.py`
+- Change: added `_obstacle_replan_pending` so an obstacle-triggered backup continues through wait/replan instead of being canceled by a brief `Path clear` after reversing
+- Why: this matches the intended recovery sequence (`backup -> wait for map -> replan`) and prevents the repeated backup/resume loop seen in the live logs
+
+#### Patch 8 — PID now corrects lookahead heading with signed cross-track error
+- File: `simple_motion_pkg/simple_motion_pkg/controllers/pid.py`
+- Change: PID now finds `nearest_on_path()` first, advances lookahead from that local segment, and subtracts `atan2(cte, lookahead)` from the lookahead bearing before running the PID terms
+- Why: this is the smallest controller-local fix that addresses the live failure mode where PID saw near-zero heading error while still far off the path
+
+#### Patch 9 — MPC now reseeds stale warm-start speeds and restores the forward-progress weight
+- Files:
+  `simple_motion_pkg/simple_motion_pkg/controllers/mpc.py`
+  `simple_motion_pkg/config/motion_params.yaml`
+- Change: when the previous warm-start sequence is stuck near zero speed, MPC now reseeds the speed components back toward `v_desired`; `mpc_r_v` in the shipped config is restored from `0.05` to `0.5`
+- Why: this preserves the current MPC architecture but reduces the spin-in-place local minimum seen in live compare logs and the active-MPC obstacle run
+
+#### Patch 10 — keep curvature profiling valid near the end of short replanned paths
+- File: `simple_motion_pkg/simple_motion_pkg/velocity_profiler.py`
+- Change: `_menger_curvature()` now shrinks its sampling window near the goal so `idx`, `mid`, and `end` remain distinct instead of collapsing `mid` and `end` onto the same last waypoint
+- Why: short obstacle-replan paths were being misclassified as zero-curvature near the goal, which let MPC drive them too fast and repeatedly skim back into the obstacle region
+
+#### Patch 11 — add a soft clearance preference to the existing planners
+- Files:
+  `trajectory_planner_pkg/trajectory_planner_pkg/planner_core.py`
+  `trajectory_planner_pkg/trajectory_planner_pkg/planner_node.py`
+  `trajectory_planner_pkg/config/planner_params.yaml`
+- Change:
+  A*, Hybrid-A*, and RRT* now accept an optional clearance map and add a soft cost for travelling too close to inflated obstacles.
+  The planner node computes the clearance field from the current grid and increases the clearance weight when the same goal is requested again within a short time window, which is used here as a replan proxy.
+- Why:
+  this keeps the current planner architecture but biases replans toward routes with more breathing room, which is exactly the mitigation requested for false obstacle detections near path edges
+
+### Pending Actions
+- [ ] Run the stack in Gazebo / ROS 2 and capture `/path_follower_debug` during an open-path test
+- [ ] Confirm that Stanley remains the best live baseline around obstacles; if not, compare Stanley vs LQR directly
+- [ ] Verify blocked obstacle behavior end-to-end: raw scan → forward metric → map age → replanned path
+- [ ] Relaunch the autonomy stack before judging Patches 7-11, because the currently running stack is still using the installed package version from `install/`
+- [ ] Decide whether backup-on-obstacle should remain or be removed after live validation
+- [ ] If false obstacle stops still happen even on clearly wide replans, inspect raw scan filtering / persistence directly instead of pushing planner clearance farther
+
+---
+
+## Iteration 12: Hybrid A* Replanning Failure Fix
+
+**Date:** March 18, 2026
+**Status:** ✅ COMPLETE
+
+### Objective
+Fix Hybrid A* failing to find a path when the robot is snapped to the inflated-obstacle boundary and the only visible route passes through a clearance-penalised corridor.
+
+### Root Cause Analysis
+
+Observed log:
+```
+Start cell (631, 177) inside inflated obstacle — snapped to (630, 177)
+Clearance bias (replan): pref=0.30m  weight=2.00
+Planning hybrid_astar: start=(-6.16,9.58) → goal=(-5.20,12.69)
+Planner found NO path.
+```
+
+Three compounding causes identified:
+
+**Cause 1 — Snap lands right at the obstacle boundary**
+`_nearest_free_cell()` (BFS outward) correctly finds the nearest free cell, but on a 0.05 m grid that is often just 1 cell away. The snapped start is still at zero clearance on the inflated grid.
+
+**Cause 2 — Doubled clearance weight makes boundary exits too expensive**
+On a replan, `clearance_weight` is scaled by `replan_clearance_scale=2.0` → `weight=2.00`. With `preferred_clearance=6 cells` (0.30 m / 0.05 m), every cell within 6 cells of an obstacle receives a quadratic penalty. When the only viable escape route from the snapped start passes through the preferred-clearance band, the accumulated penalty exceeds any path cost and the open set exhausts without reaching the goal.
+
+**Cause 3 — Coarse Hybrid A* steer angles miss tight-corridor headings**
+Default steer angles `[-0.5, 0.0, 0.5]` (±28.6°) produce only 3 heading options per step. In narrow corridors where the robot must hold a heading close to ±14°, neither action is attractive and the search prematurely converges.
+
+### Patches Applied
+
+#### Patch 12a — finer Hybrid A* steer angles
+- File: `trajectory_planner_pkg/trajectory_planner_pkg/planner_core.py`
+- Change: default `steer_angles` changed from `[-0.5, 0.0, 0.5]` to `[-0.5, -0.25, 0.0, 0.25, 0.5]`
+- Why: adds intermediate ±14.3° options so the search can hold headings needed to thread tight corridors; 5 actions per step vs 3
+
+#### Patch 12b — two-stage planning retry in `_goal_cb`
+- File: `trajectory_planner_pkg/trajectory_planner_pkg/planner_node.py`
+- Change: after the primary plan fails, two automatic retries are attempted in sequence:
+  1. **Retry 1 — drop clearance bias:** re-runs the same planner on the inflated grid with `clearance_weight=0`. Handles the case where the doubled replan penalty blocks the only viable corridor; a path with less breathing room is still better than no path.
+  2. **Retry 2 — un-inflated grid:** re-derives `start_rc` and `goal_rc` from world coordinates, snaps both to the raw (un-inflated) grid, and re-runs with no clearance penalty. Handles the case where the robot centre has a free path but the inflated footprint has no solution at all. The raw grid is also used for the subsequent `shortcut_smooth()` call so there is no inconsistency.
+- Why: the previous code gave up after one attempt; these retries cover the two most common failure modes without changing the planner algorithm
+
+### How to Test
+No rebuild required (Python only). Restart the autonomy stack:
+```bash
+# T1 (if not running): ros2 launch clearpath_gz simulation.launch.py setup_path:=/home/prajjwal/clearpath
+# T2 (if not running): ros2 launch clearpath_nav2_demos slam.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
+ros2 launch autonomy_bringup autonomy.launch.py
+```
+Drive the robot close to an obstacle and send a goal. Expected log signatures:
+- `Planner failed — retrying without clearance bias …` → Retry 1 activated
+- `Planner failed — retrying on un-inflated grid …` → Retry 2 activated
+- `Path found: N waypoints` → a retry succeeded
