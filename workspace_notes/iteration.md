@@ -19,6 +19,7 @@
 - [Iteration 10](#iteration-10-actual-trajectory-trace) — Mar 10, 2026 ✅ COMPLETE
 - [Iteration 11](#iteration-11-systematic-audit--debug-instrumentation) — Mar 16, 2026 🟡 IN PROGRESS
 - [Iteration 12](#iteration-12-hybrid-a-replanning-failure-fix) — Mar 18, 2026 ✅ COMPLETE
+- [Iteration 13](#iteration-13-aruco-marker-gazebo-model) — Mar 18, 2026 ✅ COMPLETE
 
 ---
 
@@ -996,3 +997,90 @@ Drive the robot close to an obstacle and send a goal. Expected log signatures:
 - `Planner failed — retrying without clearance bias …` → Retry 1 activated
 - `Planner failed — retrying on un-inflated grid …` → Retry 2 activated
 - `Path found: N waypoints` → a retry succeeded
+
+---
+
+## Iteration 13: ArUco Marker Gazebo Model
+
+**Date:** March 18, 2026
+**Status:** ✅ COMPLETE
+
+### Objective
+Add a static ArUco marker panel to Gazebo so the robot camera can see it — first step of an object-following workflow. No detector or follower logic yet.
+
+### Audit Findings
+- No existing Gazebo model folders or spawn scripts in the workspace.
+- Robot simulation is managed by the external `clearpath_gz` package; Gazebo world is `warehouse`.
+- `ros_gz_sim` is available for runtime spawning via `ros2 run ros_gz_sim create`.
+- `autonomy_bringup` is the right home for simulation assets (it already owns launch/config for the full stack).
+- `cv2.aruco` (OpenCV 4.6.0 legacy API) is available for PNG generation.
+- `GZ_SIM_RESOURCE_PATH` cannot be set retroactively on a running Gazebo server, so the spawn script uses `ros_gz_sim create -string` with an embedded `file://` URI — no environment variable required.
+
+### Files Added
+
+```
+autonomy_bringup/
+  models/
+    aruco_marker_0/
+      model.config                          ← Gazebo model metadata
+      model.sdf                             ← Reference SDF (model:// URIs)
+      materials/textures/
+        aruco_marker_0.png                  ← Pre-generated 512×512 PNG
+  scripts/
+    spawn_aruco_marker.py                   ← Runtime spawner (generates SDF inline)
+```
+
+### Files Modified
+
+| File | Change |
+|---|---|
+| `autonomy_bringup/setup.py` | Added `models/` and `scripts/` to `data_files` so they install under `share/autonomy_bringup/` |
+
+### Marker Specification
+
+| Property | Value |
+|---|---|
+| Dictionary | `DICT_4X4_50` |
+| Marker ID | `0` |
+| Face size | `0.4 m × 0.4 m` |
+| Thickness | `0.01 m` (X axis) |
+| Panel face direction | `−X` (faces robot at origin when spawned with yaw=0) |
+| Texture | 512×512 px PNG, marker 400 px + 56 px white border on each side |
+| SDF material | PBR metal, `metalness=0.0`, `roughness=1.0` (matte) |
+
+### How to Spawn
+
+**Prerequisites:** Gazebo (`clearpath_gz simulation.launch.py`) must be running.
+
+```bash
+# From the source tree (no build needed):
+python3 autonomy_bringup/scripts/spawn_aruco_marker.py
+
+# Or after colcon build:
+python3 install/autonomy_bringup/share/autonomy_bringup/scripts/spawn_aruco_marker.py
+
+# Custom pose:
+python3 autonomy_bringup/scripts/spawn_aruco_marker.py --x 3.0 --y 0.0 --z 0.8 --world warehouse
+```
+
+### How to Verify
+
+1. **In Gazebo GUI** — look for a white panel with a black-and-white ArUco square at (3, 0, 0.8).
+
+2. **In RViz / rqt_image_view** — drive the robot toward x=3.0 and open:
+   ```bash
+   ros2 run rqt_image_view rqt_image_view
+   # Select topic: /a300_00000/sensors/camera_0/color/image
+   ```
+   The ArUco marker panel should be clearly visible as the robot approaches.
+
+3. **Quick topic check:**
+   ```bash
+   ros2 topic hz /a300_00000/sensors/camera_0/color/image
+   # Should be ~30 Hz with no errors
+   ```
+
+### Notes for Next Step
+- The texture is pre-generated and committed; `spawn_aruco_marker.py` will regenerate it if the PNG is missing.
+- Texture orientation on the −X face of the box uses OGRE2's default UV mapping. If the ArUco detector later reports incorrect detection due to mirroring, fix by adding `cv2.flip(canvas, 1)` in `_ensure_texture()`.
+- Next milestone: add an ArUco detector node that subscribes to the camera topic and publishes marker pose.

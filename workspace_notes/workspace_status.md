@@ -1,6 +1,6 @@
 # Workspace Status & Component Overview
 
-**Last Updated:** March 18, 2026 (Iteration 12 — Hybrid A* replanning failure fix)
+**Last Updated:** March 18, 2026 (Iteration 13 — ArUco marker Gazebo model)
 **Project:** Clearpath A300 Autonomous Navigation System
 
 ---
@@ -10,7 +10,7 @@
 - **Robot:** Clearpath A300 (a300-00000)
 - **ROS Version:** ROS 2 Jazzy
 - **Main Goal:** Autonomous path planning and obstacle avoidance with multi-sensor fusion
-- **Current Status:** 🟡 Iteration 11 in progress; Iteration 12 complete — Hybrid A* no-path failure fixed with two-stage retry and finer steer angles
+- **Current Status:** 🟡 Iteration 11 in progress; Iteration 13 complete — static ArUco marker panel added to Gazebo for object-following workflow; detector/follower not yet implemented
 
 ---
 
@@ -91,10 +91,12 @@
 - **Recovery:** stuck detection (4s/0.15m), off-path detection (1.5m), `_waiting_for_replan` freeze, closest-waypoint start
 
 ### 8. **Autonomy Bringup** (`/autonomy_bringup`) — NEW
-**Status:** ✅ Complete (Iteration 10, Mar 10 2026)
+**Status:** ✅ Complete (Iteration 13, Mar 18 2026)
 - Unified launch: planner + path_follower + twist_mux + RViz
 - RViz config: Map, TF, RobotModel, 4 planner paths (A*/Hybrid-A*/RRT*/Selected), LaserScan, Reference Path (white), **Actual Trajectory (yellow)**, Goal tool
 - Launch: `autonomy.launch.py`
+- **ArUco marker model:** `models/aruco_marker_0/` — DICT_4X4_50 ID 0, 0.4 m × 0.4 m panel, pre-generated 512×512 PNG texture
+- **Spawn script:** `scripts/spawn_aruco_marker.py` — spawns marker at x=3.0 y=0.0 z=0.8 in the `warehouse` world; no build required to use from source tree
 
 ---
 
@@ -250,6 +252,7 @@ map
 - ✅ Iteration 11 fixed near-goal curvature profiling on short replanned paths so MPC no longer treats them as straight at full speed
 - ✅ Iteration 11 added a soft clearance bias to replans so paths prefer extra distance from inflated obstacles without changing robot footprint
 - ✅ Iteration 12 fixed Hybrid A* no-path failure: finer steer angles (5 vs 3) + two-stage retry (drop clearance bias → un-inflated grid fallback)
+- ✅ Iteration 13 added static ArUco marker panel (DICT_4X4_50 ID 0, 0.4 m × 0.4 m) to Gazebo with runtime spawn script
 
 ---
 

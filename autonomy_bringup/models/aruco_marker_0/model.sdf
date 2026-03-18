@@ -1,0 +1,45 @@
+<?xml version="1.0" ?>
+<!--
+  ArUco marker panel — DICT_4X4_50 ID 0
+  ======================================
+  Static thin box, 0.4 m × 0.4 m face, 0.01 m thick (X axis).
+  The -X face (normal pointing toward x=0) shows the ArUco texture and
+  is the face a robot at the origin looking along +X will see.
+
+  NOTE: The texture path uses a model:// URI which requires the parent
+  directory of this model folder to be in GZ_SIM_RESOURCE_PATH on the
+  Gazebo server.  Use scripts/spawn_aruco_marker.py which builds an
+  inline SDF with an absolute file:// URI — no env-var dependency.
+-->
+<sdf version="1.9">
+  <model name="aruco_marker_0">
+    <static>true</static>
+    <link name="link">
+
+      <visual name="visual">
+        <geometry>
+          <!-- thin in X (0.01 m), 0.4 m wide (Y) × 0.4 m tall (Z) -->
+          <box><size>0.01 0.4 0.4</size></box>
+        </geometry>
+        <material>
+          <diffuse>1 1 1 1</diffuse>
+          <specular>0.05 0.05 0.05 1</specular>
+          <pbr>
+            <metal>
+              <albedo_map>model://aruco_marker_0/materials/textures/aruco_marker_0.png</albedo_map>
+              <metalness>0.0</metalness>
+              <roughness>1.0</roughness>
+            </metal>
+          </pbr>
+        </material>
+      </visual>
+
+      <collision name="collision">
+        <geometry>
+          <box><size>0.01 0.4 0.4</size></box>
+        </geometry>
+      </collision>
+
+    </link>
+  </model>
+</sdf>
