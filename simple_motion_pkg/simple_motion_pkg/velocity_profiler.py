@@ -77,12 +77,21 @@ class VelocityProfiler:
         Estimate path curvature at idx using three points spaced `window` apart
         via the Menger curvature formula:  κ = 2·area / (|ab|·|bc|·|ac|)
         """
-        n   = len(path)
-        end = min(idx + window, n - 1)
-        if end <= idx:
+        n = len(path)
+        if idx >= n - 2:
             return 0.0
 
-        mid = min(idx + window // 2, n - 1)
+        # Near the goal on short replanned paths, shrinking the window keeps
+        # the three-point curvature sample valid instead of collapsing mid/end
+        # onto the same waypoint and falsely reporting zero curvature.
+        end = min(idx + window, n - 1)
+        if end - idx < 2:
+            return 0.0
+
+        mid = idx + max(1, (end - idx) // 2)
+        if mid >= end:
+            mid = end - 1
+
         ax, ay = path[idx]
         bx, by = path[mid]
         cx, cy = path[end]

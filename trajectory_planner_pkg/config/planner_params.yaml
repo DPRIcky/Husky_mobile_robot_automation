@@ -3,7 +3,7 @@ trajectory_planner:
   ros__parameters:
     # ── Planner selection ──────────────────────────────────────────────────────
     # Options: "astar" | "hybrid_astar" | "rrt_star"
-    planner_type: "astar"
+    planner_type: "hybrid_astar"
 
     # ── Compare mode ───────────────────────────────────────────────────────────
     # When true: runs ALL THREE planners on every goal for visual comparison.
@@ -29,6 +29,11 @@ trajectory_planner:
                                    # map is unknown and allow_unknown=false would block all planning.
                                    # Physical obstacles in unknown areas are caught by the lidar stop
                                    # in path_follower (obstacle_stop_dist=0.50m) rather than the planner.
+    clearance_bias_dist_m: 0.30    # soft preferred clearance beyond the inflated obstacle boundary
+    clearance_bias_weight: 1.0     # cost penalty for hugging inflated obstacles; higher = wider detours
+    replan_clearance_scale: 2.0    # repeated same-goal replans bias harder away from obstacle boundaries
+    replan_goal_repeat_s: 10.0     # same goal within this window is treated as a replan for clearance bias
+    replan_goal_tolerance_m: 0.20  # how close two goals must be to count as the same replan target
 
     # ── Hybrid-A* parameters (used when planner_type = hybrid_astar) ─────────
     # Searches (x, y, heading) state space — respects robot turning constraints.

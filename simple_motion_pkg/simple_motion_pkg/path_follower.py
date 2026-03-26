@@ -18,11 +18,12 @@ Velocity profiler:
     Shared across all controllers. Computes desired speed from path curvature,
     goal proximity, and obstacle proximity before passing it to the controller.
 
-Replanning (unchanged from Iter 8):
-    - Obstacle in forward LiDAR cone  → stop → wait map_update_delay → replan
+Replanning / obstacle recovery:
+    - Obstacle in forward LiDAR cone  → reverse 1 s → wait map_update_delay → replan
     - Off-path (> off_path_dist_m)    → replan (6 s cooldown)
     - Stuck (< stuck_dist in 4 s)     → replan
     - _waiting_for_replan flag keeps robot frozen until new path arrives
+    - Scan clear owns _blocked_since / replan reset while obstacle replans are active
 
 Twist mux:
     Publishes to /autonomous/cmd_vel.  Run twist_mux node to merge with
@@ -47,6 +48,7 @@ from .controllers import (
     StanleyController, PIDController, PurePursuitController,
     LQRController, MPCController, CONTROLLER_NAMES,
 )
+from .controllers.utils import nearest_on_path as _nearest_on_path
 from .velocity_profiler import VelocityProfiler
 
 
@@ -202,6 +204,13 @@ class PathFollower(Node):
         self._replan_requested   = False
         self._last_replan_time   = None
         self._waiting_for_replan = False
+        self._obstacle_replan_pending = False
+
+        # Backup-on-obstacle state
+        self._backing_up      = False
+        self._back_start_time = None
+        self._back_duration_s = 1.0   # seconds to reverse after obstacle stop
+        self._back_vel        = 0.12  # m/s reverse speed
 
         # Stuck detection
         self._stuck_check_pose = None
@@ -218,6 +227,8 @@ class PathFollower(Node):
         # Compare-mode metrics log timer
         self._compare_metrics: dict = {}
         self._last_metrics_log = None
+        self._last_stuck_detected = False
+        self._last_off_path_detected = False
 
         # ── TF ────────────────────────────────────────────────────────────
         self._tf_buffer   = tf2_ros.Buffer()
@@ -239,6 +250,17 @@ class PathFollower(Node):
         self._actual_traj      = Path()
         self._actual_traj.header.frame_id = self.global_frame
         self._traj_max_poses   = 2000   # cap to avoid unbounded memory
+
+        # Debug diagnostics topic
+        # Layout: [v_desired, v_cmd, v_final, w_cmd, w_final,
+        #          cte, he_deg, forward_min, cone_center_deg,
+        #          path_idx, near_idx, n_waypoints, avg_wp_spacing_m,
+        #          blocked_since_s, waiting_for_replan, backing_up,
+        #          replan_requested, stuck_detected, off_path_detected,
+        #          obstacle_replan_pending]
+        self._debug_pub = self.create_publisher(
+            Float64MultiArray, '/path_follower_debug', 10)
+        self._last_debug_log_t = None
 
         self._timer = self.create_timer(1.0 / rate, self._control_loop)
 
@@ -276,10 +298,12 @@ class PathFollower(Node):
         self._current_goal = self._path[-1]
 
         # Reset replan / recovery state
-        # NOTE: _blocked_since intentionally NOT cleared — scan clears it.
-        # NOTE: _last_replan_time intentionally NOT cleared — cooldown persists.
+        # _last_replan_time intentionally NOT cleared — cooldown persists.
         self._waiting_for_replan = False
-        self._replan_requested   = False
+        self._replan_requested = False
+        self._obstacle_replan_pending = False
+        self._backing_up = False
+        self._back_start_time = None
         self._stuck_check_pose   = None
         self._stuck_check_time   = None
 
@@ -288,9 +312,20 @@ class PathFollower(Node):
             ctrl.reset()
         self._profiler.reset()
 
+        # Log path geometry so we can check if shortcut_smooth left too few waypoints
+        n_wp = len(self._path)
+        if n_wp >= 2:
+            spacings = [math.hypot(self._path[i+1][0]-self._path[i][0],
+                                   self._path[i+1][1]-self._path[i][1])
+                        for i in range(n_wp - 1)]
+            avg_sp = sum(spacings) / len(spacings)
+            max_sp = max(spacings)
+        else:
+            avg_sp = max_sp = 0.0
         self.get_logger().info(
-            f'New path: {len(self._path)} wp  '
-            f'start=wp{self._path_idx}  ctrl={self.controller_type}')
+            f'New path: {n_wp} wp  start=wp{self._path_idx}  '
+            f'avg_spacing={avg_sp:.2f}m  max_spacing={max_sp:.2f}m  '
+            f'ctrl={self.controller_type}')
 
     def _scan_cb(self, msg: LaserScan):
         self._latest_scan = msg
@@ -323,8 +358,14 @@ class PathFollower(Node):
             return 0.0
         return self._laser_yaw_offset
 
-    def _scan_min_in_cone(self):
-        """Return (forward_min_m, in_warn_zone)."""
+    def _scan_min_in_cone(self, cone_center: float = 0.0):
+        """Return (forward_min_m, in_warn_zone).
+
+        cone_center — angle (rad) in base_link frame toward which the cone
+                      is aimed.  0.0 = straight ahead (default / backward compat).
+                      Pass the path's forward heading (in robot frame) to avoid
+                      false stops when the path turns away from a nearby obstacle.
+        """
         scan = self._latest_scan
         if scan is None:
             return float('inf'), False
@@ -333,7 +374,8 @@ class PathFollower(Node):
         for i, r in enumerate(scan.ranges):
             if not math.isfinite(r) or r <= scan.range_min or r >= scan.range_max:
                 continue
-            a = _normalize_angle(scan.angle_min + i * scan.angle_increment + yaw_off)
+            a = _normalize_angle(
+                scan.angle_min + i * scan.angle_increment + yaw_off - cone_center)
             if abs(a) > self.check_angle:
                 continue
             forward_min = min(forward_min, r)
@@ -356,18 +398,51 @@ class PathFollower(Node):
             dt = max(0.001, min(dt, 0.5))   # clamp: never > 0.5 s
         self._last_control_t = now
 
+        # ── Robot pose (needed early for path-direction obstacle cone) ────
+        pose = self._get_robot_pose()
+
         # ── Obstacle detection ───────────────────────────────────────────
-        forward_min, in_warn_zone = self._scan_min_in_cone()
+        # Aim the detection cone at the local path tangent rather than a
+        # far-ahead waypoint. Sparse paths can otherwise point the cone at the
+        # goal instead of the segment the robot is actually following.
+        cone_center = 0.0
+        if pose is not None and not self._backing_up and self._path:
+            rx_c, ry_c, ryaw_c = pose
+            _cone_idx, _, path_fwd = _nearest_on_path(
+                rx_c, ry_c, self._path, self._path_idx)
+            cone_center = _normalize_angle(path_fwd - ryaw_c)
+
+        forward_min, in_warn_zone = self._scan_min_in_cone(cone_center=cone_center)
         in_danger = forward_min < self.stop_dist
 
-        if in_danger:
-            self._stop()
+        if in_danger or self._backing_up or self._obstacle_replan_pending:
+            # Phase 1 — reverse away from obstacle for back_duration_s
+            if in_danger and not self._obstacle_replan_pending:
+                self._blocked_since   = now
+                self._back_start_time = now
+                self._backing_up      = True
+                self._obstacle_replan_pending = True
+                self.get_logger().warn(
+                    f'Obstacle at {forward_min:.2f}m — reversing '
+                    f'{self._back_duration_s:.1f}s then waiting for map update.')
+
+            if self._backing_up:
+                elapsed_back = (now - self._back_start_time).nanoseconds * 1e-9
+                if elapsed_back < self._back_duration_s:
+                    # Still in backup phase — publish reverse command
+                    back_cmd = TwistStamped()
+                    back_cmd.header.stamp    = now.to_msg()
+                    back_cmd.header.frame_id = self.base_frame
+                    back_cmd.twist.linear.x  = -self._back_vel
+                    self._cmd_pub.publish(back_cmd)
+                    return
+                # Backup complete — stop and enter wait phase
+                self._backing_up = False
+                self._stop()
+
+            # Phase 2 — wait for map update, then request replan
             if self._blocked_since is None:
                 self._blocked_since = now
-                self.get_logger().warn(
-                    f'Obstacle at {forward_min:.2f}m — stopped, '
-                    f'waiting {self.map_upd_delay:.1f}s for map update.')
-                return
             blocked_sec = (now - self._blocked_since).nanoseconds * 1e-9
             if not self._replan_requested and blocked_sec >= self.map_upd_delay:
                 self._publish_replan()
@@ -379,25 +454,29 @@ class PathFollower(Node):
                     self.get_logger().warn(
                         f'Still blocked after {since_last:.1f}s — retrying replan.')
                     self._publish_replan()
+            self._stop()
             return
 
         # ── Obstacle cleared ─────────────────────────────────────────────
-        if self._blocked_since is not None:
+        if self._blocked_since is not None and not self._obstacle_replan_pending:
             self.get_logger().info('Path clear — resuming.')
             self._blocked_since    = None
             self._replan_requested = False
+            self._backing_up       = False
+            self._back_start_time  = None
 
         # ── Waiting for replanned path ───────────────────────────────────
         if self._waiting_for_replan:
             self._stop()
             return
 
-        # ── Robot pose ───────────────────────────────────────────────────
-        pose = self._get_robot_pose()
+        # ── Robot pose check ─────────────────────────────────────────────
         if pose is None:
             self._stop()
             return
         rx, ry, ryaw = pose
+        self._last_stuck_detected = False
+        self._last_off_path_detected = False
 
         # ── Record actual trajectory ─────────────────────────────────────
         ps = PoseStamped()
@@ -446,6 +525,7 @@ class PathFollower(Node):
                 moved = math.hypot(rx - self._stuck_check_pose[0],
                                    ry - self._stuck_check_pose[1])
                 if moved < self.stuck_dist_threshold and self._current_goal:
+                    self._last_stuck_detected = True
                     self.get_logger().warn(
                         f'Stuck: moved {moved:.2f}m in {elapsed:.1f}s — replanning.')
                     self._publish_replan()
@@ -463,6 +543,7 @@ class PathFollower(Node):
         if (min_path_dist > self.off_path_dist
                 and self._current_goal
                 and since_last_replan > replan_cooldown):
+            self._last_off_path_detected = True
             self.get_logger().warn(
                 f'Off-path: {min_path_dist:.2f}m — replanning.')
             self._publish_replan()
@@ -493,13 +574,70 @@ class PathFollower(Node):
                 rx, ry, ryaw, self._path, self._path_idx, v_desired, dt)
             self._path_idx = new_idx
 
-        # ── Publish ──────────────────────────────────────────────────────
+        # ── Clamp and publish ─────────────────────────────────────────────
+        v_final = float(max(0.0, min(v_cmd, self.max_v)))
+        w_final = float(max(-self.max_w, min(w_cmd, self.max_w)))
         cmd = TwistStamped()
         cmd.header.stamp    = now.to_msg()
         cmd.header.frame_id = self.base_frame
-        cmd.twist.linear.x  = float(max(0.0, min(v_cmd, self.max_v)))
-        cmd.twist.angular.z = float(max(-self.max_w, min(w_cmd, self.max_w)))
+        cmd.twist.linear.x  = v_final
+        cmd.twist.angular.z = w_final
         self._cmd_pub.publish(cmd)
+
+        # ── Debug diagnostics ─────────────────────────────────────────────
+        # nearest_on_path for debug values (one extra call, lightweight)
+        _ni, _cte_dbg, _ph_dbg = _nearest_on_path(rx, ry, self._path, self._path_idx)
+        _he_dbg = _normalize_angle(_ph_dbg - ryaw)
+
+        n_wp = len(self._path)
+        if n_wp >= 2:
+            _spacings = [math.hypot(self._path[i+1][0]-self._path[i][0],
+                                    self._path[i+1][1]-self._path[i][1])
+                         for i in range(n_wp - 1)]
+            _avg_sp = sum(_spacings) / len(_spacings)
+        else:
+            _avg_sp = 0.0
+
+        _blocked_s = ((now - self._blocked_since).nanoseconds * 1e-9
+                      if self._blocked_since is not None else -1.0)
+
+        dbg = Float64MultiArray()
+        dbg.data = [
+            v_desired, v_cmd, v_final,
+            w_cmd, w_final,
+            _cte_dbg, math.degrees(_he_dbg),
+            forward_min, math.degrees(cone_center),
+            float(self._path_idx), float(_ni), float(n_wp), _avg_sp,
+            _blocked_s,
+            float(self._waiting_for_replan),
+            float(self._backing_up),
+            float(self._replan_requested),
+            float(self._last_stuck_detected),
+            float(self._last_off_path_detected),
+            float(self._obstacle_replan_pending),
+        ]
+        self._debug_pub.publish(dbg)
+
+        # Throttled human-readable log (every 1 s)
+        _log_interval = 1.0
+        if (self._last_debug_log_t is None or
+                (now - self._last_debug_log_t).nanoseconds * 1e-9 >= _log_interval):
+            self._last_debug_log_t = now
+            _flags = (f"{'BLK' if self._blocked_since else '---'}"
+                      f"|{'WFR' if self._waiting_for_replan else '---'}"
+                      f"|{'ORP' if self._obstacle_replan_pending else '---'}"
+                      f"|{'RPL' if self._replan_requested else '---'}"
+                      f"|{'STK' if self._last_stuck_detected else '---'}"
+                      f"|{'OFF' if self._last_off_path_detected else '---'}"
+                      f"|{'BCK' if self._backing_up else '---'}")
+            self.get_logger().info(
+                f'[DBG] {self.controller_type:10s} '
+                f'near={_ni:3d}  tgt={self._path_idx:3d}/{n_wp:3d} '
+                f'cte={_cte_dbg:+.3f}m  he={math.degrees(_he_dbg):+6.1f}°  '
+                f'v={v_desired:.2f}→{v_cmd:.2f}→{v_final:.2f}  '
+                f'w={w_cmd:+.2f}→{w_final:+.2f}  '
+                f'obs={forward_min:.2f}m(cone={math.degrees(cone_center):+.0f}°)  '
+                f'avg_sp={_avg_sp:.2f}m  flags={_flags}')
 
     # ──────────────────────────────────────────────────────────────────────────
     # Compare mode

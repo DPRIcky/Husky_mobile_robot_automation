@@ -1,15 +1,16 @@
 """
 PID path-following controller.
 
-Error signal: yaw error to the lookahead waypoint.
-Adds integral (removes steady-state drift) and derivative (damps overshoot)
-terms on top of a pure proportional yaw controller.
+Error signal: yaw error to the lookahead waypoint corrected by signed
+cross-track error. This keeps the controller in the PID family while
+preventing the common case where a laterally offset robot points at the
+lookahead waypoint and reports almost zero heading error.
 
 State:  _integral, _prev_error  (reset on new path)
 """
 
 import math
-from .utils import normalize_angle, advance_lookahead, signed_cte
+from .utils import normalize_angle, advance_lookahead, nearest_on_path
 
 
 class PIDController:
@@ -37,12 +38,13 @@ class PIDController:
         """
         Returns (v_cmd, w_cmd, cte, heading_error, new_path_idx).
         """
-        new_idx = advance_lookahead(rx, ry, path, path_idx, self.lookahead)
+        best_idx, cte, _ = nearest_on_path(rx, ry, path, path_idx)
+        new_idx = advance_lookahead(rx, ry, path, best_idx, self.lookahead)
         tx, ty  = path[new_idx]
 
-        dist        = math.hypot(tx - rx, ty - ry)
         desired_yaw = math.atan2(ty - ry, tx - rx)
-        error       = normalize_angle(desired_yaw - ryaw)
+        cte_correction = math.atan2(cte, max(self.lookahead, 1e-3))
+        error = normalize_angle(desired_yaw - cte_correction - ryaw)
 
         # Integral with anti-windup clamp
         self._integral += error * dt
@@ -62,7 +64,5 @@ class PIDController:
         # Speed: scale with v_desired, reduce for large yaw errors
         yaw_factor = max(0.1, 1.0 - abs(error) / math.pi)
         v_cmd = v * yaw_factor
-
-        cte = signed_cte(rx, ry, path, new_idx)
 
         return v_cmd, w, cte, error, new_idx

@@ -18,8 +18,9 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
@@ -33,11 +34,13 @@ def generate_launch_description():
 
     return LaunchDescription([
         # ---- Arguments ----
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('planner_params', default_value=planner_params),
-        DeclareLaunchArgument('motion_params', default_value=motion_params),
-        DeclareLaunchArgument('launch_rviz', default_value='true'),
-        DeclareLaunchArgument('launch_motion', default_value='true'),
+        DeclareLaunchArgument('use_sim_time',    default_value='true'),
+        DeclareLaunchArgument('planner_params',  default_value=planner_params),
+        DeclareLaunchArgument('motion_params',   default_value=motion_params),
+        DeclareLaunchArgument('launch_rviz',     default_value='true'),
+        DeclareLaunchArgument('launch_motion',   default_value='true'),
+        DeclareLaunchArgument('launch_plot',     default_value='false',
+            description='Launch real-time GT vs SLAM localisation plot'),
 
         LogInfo(msg='=== Autonomy Bringup: starting planner + motion + RViz ==='),
 
@@ -95,6 +98,20 @@ def generate_launch_description():
             output='screen',
             condition=IfCondition(LaunchConfiguration('launch_rviz')),
             arguments=['-d', rviz_config],
+            parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+            remappings=[
+                ('/tf', '/a300_00000/tf'),
+                ('/tf_static', '/a300_00000/tf_static'),
+            ],
+        ),
+
+        # ---- Ground-truth vs SLAM localisation plot (optional) ----
+        Node(
+            package='autonomy_bringup',
+            executable='plot_localisation',
+            name='localisation_plotter',
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('launch_plot')),
             parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
             remappings=[
                 ('/tf', '/a300_00000/tf'),

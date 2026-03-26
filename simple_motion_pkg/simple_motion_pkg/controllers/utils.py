@@ -13,10 +13,30 @@ def normalize_angle(a: float) -> float:
 
 def advance_lookahead(rx: float, ry: float, path: list,
                       idx: int, lookahead: float) -> int:
-    """Advance idx until path[idx] is at least `lookahead` metres from robot."""
+    """
+    Advance idx to a waypoint that is both ahead of the robot on the path and
+    at least `lookahead` metres away.
+
+    Sparse paths can leave a waypoint behind the robot while still farther than
+    `lookahead`; skipping those prevents controllers from targeting waypoints
+    the robot has already passed.
+    """
     n = len(path)
     while idx < n - 1:
-        if math.hypot(path[idx][0] - rx, path[idx][1] - ry) >= lookahead:
+        px, py = path[idx]
+        nx, ny = path[idx + 1]
+        sx = nx - px
+        sy = ny - py
+
+        # If the robot has already progressed past this waypoint along the
+        # current path segment, keep moving the target forward.
+        if sx * sx + sy * sy > 1e-9:
+            progress = (rx - px) * sx + (ry - py) * sy
+            if progress > 0.0:
+                idx += 1
+                continue
+
+        if math.hypot(px - rx, py - ry) >= lookahead:
             break
         idx += 1
     return idx
@@ -29,7 +49,8 @@ def nearest_on_path(rx: float, ry: float, path: list,
 
     Returns (idx, signed_cte, path_heading) where:
       - idx          nearest waypoint index
-      - signed_cte   lateral error; positive = robot is to the RIGHT of path
+      - signed_cte   lateral error; positive = robot is to the LEFT of path
+                     (2-D cross product: tangent × robot_offset > 0 ↔ LEFT)
       - path_heading heading of path tangent at nearest point (radians)
     """
     n = len(path)
@@ -61,7 +82,7 @@ def nearest_on_path(rx: float, ry: float, path: list,
     # Vector from nearest point to robot
     ex = rx - path[best_idx][0]
     ey = ry - path[best_idx][1]
-    # cte = tx_n × (ex, ey): positive → robot is to the right of path direction
+    # cte = tx_n × (ex, ey): positive → robot is to the left of path direction
     cte = tx_n * ey - ty_n * ex
 
     return best_idx, cte, path_heading
