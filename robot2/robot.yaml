@@ -1,0 +1,97 @@
+serial_number: a300-00001
+version: 0
+system:
+  hosts:
+    - hostname: cpr-a300-00001
+      ip: 192.168.131.2
+  ros2:
+    namespace: a300_00001
+platform:
+  controller: ps4
+
+  battery:
+    model: S_24V20_U1
+    configuration: S1P2
+
+  attachments:
+    - name: front_bumper
+      type: a300.bumper
+      parent: front_bumper_mount
+
+    - name: rear_bumper
+      type: a300.bumper
+      parent: rear_bumper_mount
+
+    - name: top_plate
+      type: a200.top_plate
+
+    - name: sensor_arch
+      type: a200.sensor_arch
+      parent: default_mount
+      model: sensor_arch_300
+      xyz: [0.05, 0.0, 0.025]
+      rpy: [0.0, 0.0, 0.0]
+      enabled: true
+
+sensors:
+  imu:
+    - model: microstrain_imu
+      urdf_enabled: true
+      launch_enabled: true
+      parent: base_link
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      ros_parameters:
+        microstrain_inertial_driver:
+          imu_frame_id: imu_0_link
+          port: /dev/microstrain_main
+          use_enu_frame: true
+
+  gps:
+    - model: garmin_18x
+      urdf_enabled: true
+      launch_enabled: true
+      parent: sensor_arch_mount
+      xyz: [0.0, 0.2, 0.01]
+      rpy: [0.0, 0.0, 0.0]
+      ros_parameters:
+        nmea_navsat_driver:
+          frame_id: gps_0_link
+          port: "/dev/clearpath/gps"
+          baud: 115200
+
+  camera:
+  - model: intel_realsense
+    urdf_enabled: true
+    launch_enabled: true
+    parent: sensor_arch_mount
+    xyz: [0.0, 0.0, 0.0]
+    rpy: [0.0, 0.0, 0.0]
+    ros_parameters:
+      camera:
+        camera_name: camera_0
+        device_type: d435
+        serial_no: '0'
+        enable_color: true
+        rgb_camera.profile: 640,480,30
+        enable_depth: true
+        depth_module.profile: 640,480,30
+        pointcloud.enable: true
+
+  lidar2d:
+    - model: hokuyo_ust
+      urdf_enabled: true
+      launch_enabled: true
+      parent: sensor_arch_mount
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      ros_parameters:
+        hokuyo_node:
+          frame_id: laser_0_link
+          port: /dev/clearpath/lidar
+          baud: 115200
+          angle_min: -2.35619
+          angle_max: 2.35619
+          scan_time: 0.1
+          range_min: 0.1
+          range_max: 30.0

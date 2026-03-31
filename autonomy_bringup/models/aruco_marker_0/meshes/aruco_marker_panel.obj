@@ -1,0 +1,19 @@
+mtllib aruco_marker_panel.mtl
+o aruco_marker_panel
+usemtl aruco_marker
+
+v 0.0 -0.2 -0.2
+v 0.0 0.2 -0.2
+v 0.0 0.2 0.2
+v 0.0 -0.2 0.2
+
+vt 0.0 0.0
+vt 1.0 0.0
+vt 1.0 1.0
+vt 0.0 1.0
+
+vn 1.0 0.0 0.0
+vn -1.0 0.0 0.0
+
+f 1/1/1 2/2/1 3/3/1 4/4/1
+f 4/4/2 3/3/2 2/2/2 1/1/2

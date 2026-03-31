@@ -17,6 +17,9 @@ setup(
         (os.path.join('share', package_name, 'models', 'aruco_marker_0'),
             glob('models/aruco_marker_0/model.*')),
         (os.path.join('share', package_name, 'models', 'aruco_marker_0',
+                      'meshes'),
+            glob('models/aruco_marker_0/meshes/*')),
+        (os.path.join('share', package_name, 'models', 'aruco_marker_0',
                       'materials', 'textures'),
             glob('models/aruco_marker_0/materials/textures/*.png')),
         # Utility scripts (spawn helpers)
@@ -31,6 +34,7 @@ setup(
     entry_points={
         'console_scripts': [
             'plot_localisation = autonomy_bringup.plot_localisation:main',
+            'aruco_detector = autonomy_bringup.aruco_detector:main',
         ],
     },
 )
