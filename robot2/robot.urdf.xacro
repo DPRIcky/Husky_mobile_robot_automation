@@ -90,9 +90,7 @@
     </visual>
     <collision name="aruco_marker_collision">
       <geometry>
-        <box>
-          <size>0.01 0.4 0.4</size>
-        </box>
+        <box size="0.01 0.4 0.4"/>
       </geometry>
     </collision>
     <inertial>

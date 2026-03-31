@@ -81,11 +81,15 @@ def generate_launch_description():
         DeclareLaunchArgument('robot2_yaw', default_value='0.0'),
         DeclareLaunchArgument('launch_aruco_detector', default_value='true',
                               choices=['true', 'false']),
+        DeclareLaunchArgument('launch_aruco_follower', default_value='false',
+                              choices=['true', 'false']),
         DeclareLaunchArgument('detector_image_topic',
                               default_value='/a300_00000/sensors/camera_0/color/image'),
         DeclareLaunchArgument('detector_camera_info_topic',
                               default_value='/a300_00000/sensors/camera_0/color/camera_info'),
         DeclareLaunchArgument('detector_marker_length_m', default_value='0.4'),
+        DeclareLaunchArgument('follower_cmd_vel_topic', default_value='/a300_00000/cmd_vel'),
+        DeclareLaunchArgument('follower_desired_standoff_m', default_value='1.5'),
     ]
 
     pkg_clearpath_gz   = FindPackageShare('clearpath_gz')
@@ -180,6 +184,27 @@ def generate_launch_description():
         ]
     )
 
+    aruco_follower = TimerAction(
+        period=13.0,
+        actions=[
+            LogInfo(msg='[two_robot_aruco] Starting ArUco follower on a300_00000 …'),
+            Node(
+                package='autonomy_bringup',
+                executable='aruco_follower',
+                name='aruco_follower',
+                namespace='a300_00000',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'target_pose_topic': '/a300_00000/aruco_detector/target_pose',
+                    'cmd_vel_topic': LaunchConfiguration('follower_cmd_vel_topic'),
+                    'desired_standoff_m': LaunchConfiguration('follower_desired_standoff_m'),
+                }],
+                condition=IfCondition(LaunchConfiguration('launch_aruco_follower')),
+            ),
+        ]
+    )
+
     # --------------------------------------------------------- Assemble
     ld = LaunchDescription(args)
     ld.add_action(LogInfo(msg='[two_robot_aruco] Starting Gazebo …'))
@@ -193,5 +218,6 @@ def generate_launch_description():
     ld.add_action(LogInfo(msg='[two_robot_aruco] Robot 2 (a300_00001) will start at t=8s …'))
     ld.add_action(robot2_launch)
     ld.add_action(aruco_detector)
+    ld.add_action(aruco_follower)
 
     return ld

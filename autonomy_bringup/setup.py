@@ -35,6 +35,7 @@ setup(
         'console_scripts': [
             'plot_localisation = autonomy_bringup.plot_localisation:main',
             'aruco_detector = autonomy_bringup.aruco_detector:main',
+            'aruco_follower = autonomy_bringup.aruco_follower:main',
         ],
     },
 )

@@ -13,9 +13,10 @@ from typing import Iterable
 
 import cv2
 from cv_bridge import CvBridge
-from geometry_msgs.msg import Pose, PoseArray, TransformStamped
+from geometry_msgs.msg import Pose, PoseArray, PoseStamped, TransformStamped
 import numpy as np
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros import TransformBroadcaster
@@ -52,21 +53,31 @@ def _rotation_matrix_to_quaternion(rot: np.ndarray) -> tuple[float, float, float
     return (x, y, z, w)
 
 
+# Detect API generation once at import time so dictionary and detector always match.
+# Mixing getPredefinedDictionary (new Dictionary type) with the old detectMarkers
+# function passes the wrong C++ type and causes a SIGSEGV.
+_USE_NEW_ARUCO_API: bool = hasattr(cv2.aruco, 'ArucoDetector')
+
+
 def _load_dictionary(dictionary_name: str):
     dict_id = getattr(cv2.aruco, dictionary_name)
-    if hasattr(cv2.aruco, 'getPredefinedDictionary'):
+    if _USE_NEW_ARUCO_API:
         return cv2.aruco.getPredefinedDictionary(dict_id)
-    return cv2.aruco.Dictionary_get(dict_id)
+    # Old API: Dictionary_get returns the type expected by detectMarkers.
+    if hasattr(cv2.aruco, 'Dictionary_get'):
+        return cv2.aruco.Dictionary_get(dict_id)
+    return cv2.aruco.getPredefinedDictionary(dict_id)
 
 
 def _make_detector(aruco_dict):
-    if hasattr(cv2.aruco, 'DetectorParameters'):
+    if _USE_NEW_ARUCO_API:
         params = cv2.aruco.DetectorParameters()
-    else:
-        params = cv2.aruco.DetectorParameters_create()
-
-    if hasattr(cv2.aruco, 'ArucoDetector'):
         return cv2.aruco.ArucoDetector(aruco_dict, params), None
+    # Old API: keep params object for detectMarkers call.
+    if hasattr(cv2.aruco, 'DetectorParameters_create'):
+        params = cv2.aruco.DetectorParameters_create()
+    else:
+        params = cv2.aruco.DetectorParameters()
     return None, params
 
 
@@ -90,10 +101,9 @@ class ArucoDetector(Node):
             'camera_info_topic', '/a300_00000/sensors/camera_0/color/camera_info')
         self.declare_parameter('marker_length_m', 0.4)
         self.declare_parameter('dictionary', 'DICT_4X4_50')
-        self.declare_parameter('target_ids', [])
+        self.declare_parameter('target_ids', [], ParameterDescriptor(dynamic_typing=True))
         self.declare_parameter('frame_prefix', 'aruco_marker')
         self.declare_parameter('publish_debug_image', True)
-        self.declare_parameter('use_sim_time', True)
 
         self._bridge = CvBridge()
         self._camera_matrix: np.ndarray | None = None
@@ -111,6 +121,7 @@ class ArucoDetector(Node):
         camera_info_topic = str(self.get_parameter('camera_info_topic').value)
 
         self._pose_pub = self.create_publisher(PoseArray, '~/poses', 10)
+        self._target_pose_pub = self.create_publisher(PoseStamped, '~/target_pose', 10)
         self._marker_pub = self.create_publisher(MarkerArray, '~/markers', 10)
         self._debug_pub = self.create_publisher(Image, '~/debug_image', 10)
         self._tf_broadcaster = TransformBroadcaster(self)
@@ -125,7 +136,9 @@ class ArucoDetector(Node):
         if not any(msg.k):
             return
         self._camera_matrix = np.array(msg.k, dtype=np.float64).reshape((3, 3))
-        self._dist_coeffs = np.array(msg.d, dtype=np.float64)
+        d = np.array(msg.d, dtype=np.float64)
+        # Some simulated cameras publish empty D; default to 5-zero plumb_bob.
+        self._dist_coeffs = d if d.size > 0 else np.zeros(5, dtype=np.float64)
         self._camera_frame = msg.header.frame_id or self._camera_frame or 'camera'
         self._waiting_for_info_logged = False
 
@@ -154,118 +167,158 @@ class ArucoDetector(Node):
             self._debug_pub.publish(debug_msg)
 
     def _image_cb(self, msg: Image) -> None:
-        if self._camera_matrix is None or self._dist_coeffs is None:
-            if not self._waiting_for_info_logged:
-                self.get_logger().info('Waiting for valid camera_info before ArUco detection starts')
-                self._waiting_for_info_logged = True
-            return
+        try:
+            if self._camera_matrix is None or self._dist_coeffs is None:
+                if not self._waiting_for_info_logged:
+                    self.get_logger().info('Waiting for valid camera_info before ArUco detection starts')
+                    self._waiting_for_info_logged = True
+                return
 
-        frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        corners, ids, _ = self._detect_markers(gray)
+            frame = self._bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8').copy()
+            # Guard: OpenCV ArUco functions require uint8 2-D/3-D contiguous array.
+            if frame.dtype != np.uint8 or frame.ndim != 3:
+                return
+            if not frame.flags['C_CONTIGUOUS']:
+                frame = np.ascontiguousarray(frame)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            corners, ids, _ = self._detect_markers(gray)
 
-        header = msg.header
-        header.frame_id = self._camera_frame or msg.header.frame_id
+            header = msg.header
+            header.frame_id = self._camera_frame or msg.header.frame_id
 
-        if ids is None or len(ids) == 0:
-            self._publish_empty(header, frame)
-            return
-
-        ids = ids.flatten()
-        if self._target_ids:
-            keep = [idx for idx, marker_id in enumerate(ids) if int(marker_id) in self._target_ids]
-            corners = [corners[idx] for idx in keep]
-            ids = ids[keep]
-            if len(ids) == 0:
+            if ids is None or len(ids) == 0:
                 self._publish_empty(header, frame)
                 return
 
-        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-            corners, self._marker_length, self._camera_matrix, self._dist_coeffs)
+            ids = ids.flatten()
+            if self._target_ids:
+                keep = [idx for idx, marker_id in enumerate(ids) if int(marker_id) in self._target_ids]
+                corners = [corners[idx] for idx in keep]
+                ids = ids[keep]
+                if len(ids) == 0:
+                    self._publish_empty(header, frame)
+                    return
 
-        pose_array = PoseArray()
-        pose_array.header = header
+            # Object points for a flat square marker centred at origin (Z=0).
+            half = self._marker_length / 2.0
+            _obj_pts = np.array([
+                [-half,  half, 0.0],
+                [ half,  half, 0.0],
+                [ half, -half, 0.0],
+                [-half, -half, 0.0],
+            ], dtype=np.float32)
 
-        markers = [Marker(header=header, action=Marker.DELETEALL)]
-        cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+            pose_array = PoseArray()
+            pose_array.header = header
+            target_pose_msg = None
 
-        for index, marker_id in enumerate(ids):
-            rvec = rvecs[index].reshape(3)
-            tvec = tvecs[index].reshape(3)
-            rot_matrix, _ = cv2.Rodrigues(rvec)
-            quat = _rotation_matrix_to_quaternion(rot_matrix)
+            markers = [Marker(header=header, action=Marker.DELETEALL)]
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids.reshape(-1, 1))
 
-            pose = Pose()
-            pose.position.x = float(tvec[0])
-            pose.position.y = float(tvec[1])
-            pose.position.z = float(tvec[2])
-            pose.orientation.x = quat[0]
-            pose.orientation.y = quat[1]
-            pose.orientation.z = quat[2]
-            pose.orientation.w = quat[3]
-            pose_array.poses.append(pose)
-
-            transform = TransformStamped()
-            transform.header = header
-            transform.child_frame_id = f'{self._frame_prefix}_{int(marker_id)}'
-            transform.transform.translation.x = pose.position.x
-            transform.transform.translation.y = pose.position.y
-            transform.transform.translation.z = pose.position.z
-            transform.transform.rotation.x = pose.orientation.x
-            transform.transform.rotation.y = pose.orientation.y
-            transform.transform.rotation.z = pose.orientation.z
-            transform.transform.rotation.w = pose.orientation.w
-            self._tf_broadcaster.sendTransform(transform)
-
-            marker = Marker()
-            marker.header = header
-            marker.ns = 'aruco_detections'
-            marker.id = int(marker_id)
-            marker.type = Marker.CUBE
-            marker.action = Marker.ADD
-            marker.pose.position.x = pose.position.x
-            marker.pose.position.y = pose.position.y
-            marker.pose.position.z = pose.position.z
-            marker.pose.orientation.x = pose.orientation.x
-            marker.pose.orientation.y = pose.orientation.y
-            marker.pose.orientation.z = pose.orientation.z
-            marker.pose.orientation.w = pose.orientation.w
-            marker.scale.x = 0.01
-            marker.scale.y = self._marker_length
-            marker.scale.z = self._marker_length
-            marker.color.r = 0.1
-            marker.color.g = 0.9
-            marker.color.b = 0.2
-            marker.color.a = 0.55
-            markers.append(marker)
-
-            if hasattr(cv2.aruco, 'drawAxis'):
-                cv2.aruco.drawAxis(
-                    frame,
-                    self._camera_matrix,
-                    self._dist_coeffs,
-                    rvec,
-                    tvec,
-                    self._marker_length * 0.5,
+            for index, marker_id in enumerate(ids):
+                img_pts = corners[index].reshape(4, 2).astype(np.float32)
+                # Validate corners (guard against degenerate detections)
+                if not np.all(np.isfinite(img_pts)):
+                    continue
+                ok, rvec, tvec = cv2.solvePnP(
+                    _obj_pts, img_pts,
+                    self._camera_matrix, self._dist_coeffs,
+                    flags=cv2.SOLVEPNP_IPPE_SQUARE,
                 )
+                if not ok:
+                    continue
+                rvec = rvec.reshape(3)
+                tvec = tvec.reshape(3)
+                if not (np.all(np.isfinite(rvec)) and np.all(np.isfinite(tvec))):
+                    continue
+                rot_matrix, _ = cv2.Rodrigues(rvec)
+                quat = _rotation_matrix_to_quaternion(rot_matrix)
 
-        self._pose_pub.publish(pose_array)
-        self._marker_pub.publish(MarkerArray(markers=markers))
+                pose = Pose()
+                pose.position.x = float(tvec[0])
+                pose.position.y = float(tvec[1])
+                pose.position.z = float(tvec[2])
+                pose.orientation.x = quat[0]
+                pose.orientation.y = quat[1]
+                pose.orientation.z = quat[2]
+                pose.orientation.w = quat[3]
+                pose_array.poses.append(pose)
 
-        if self._publish_debug_image:
-            debug_msg = self._bridge.cv2_to_imgmsg(frame, encoding='bgr8')
-            debug_msg.header = header
-            self._debug_pub.publish(debug_msg)
+                if target_pose_msg is None:
+                    target_pose_msg = PoseStamped()
+                    target_pose_msg.header = header
+                    target_pose_msg.pose = pose
+
+                transform = TransformStamped()
+                transform.header = header
+                transform.child_frame_id = f'{self._frame_prefix}_{int(marker_id)}'
+                transform.transform.translation.x = pose.position.x
+                transform.transform.translation.y = pose.position.y
+                transform.transform.translation.z = pose.position.z
+                transform.transform.rotation.x = pose.orientation.x
+                transform.transform.rotation.y = pose.orientation.y
+                transform.transform.rotation.z = pose.orientation.z
+                transform.transform.rotation.w = pose.orientation.w
+                self._tf_broadcaster.sendTransform(transform)
+
+                marker = Marker()
+                marker.header = header
+                marker.ns = 'aruco_detections'
+                marker.id = int(marker_id)
+                marker.type = Marker.CUBE
+                marker.action = Marker.ADD
+                marker.pose.position.x = pose.position.x
+                marker.pose.position.y = pose.position.y
+                marker.pose.position.z = pose.position.z
+                marker.pose.orientation.x = pose.orientation.x
+                marker.pose.orientation.y = pose.orientation.y
+                marker.pose.orientation.z = pose.orientation.z
+                marker.pose.orientation.w = pose.orientation.w
+                marker.scale.x = 0.01
+                marker.scale.y = self._marker_length
+                marker.scale.z = self._marker_length
+                marker.color.r = 0.1
+                marker.color.g = 0.9
+                marker.color.b = 0.2
+                marker.color.a = 0.55
+                markers.append(marker)
+
+                if hasattr(cv2, 'drawFrameAxes'):
+                    cv2.drawFrameAxes(
+                        frame,
+                        self._camera_matrix,
+                        self._dist_coeffs,
+                        rvec,
+                        tvec,
+                        self._marker_length * 0.5,
+                    )
+
+            self._pose_pub.publish(pose_array)
+            if target_pose_msg is not None:
+                self._target_pose_pub.publish(target_pose_msg)
+            self._marker_pub.publish(MarkerArray(markers=markers))
+
+            if self._publish_debug_image:
+                debug_msg = self._bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+                debug_msg.header = header
+                self._debug_pub.publish(debug_msg)
+        except Exception as exc:
+            self.get_logger().error(f'Aruco detector callback failed: {exc}', throttle_duration_sec=2.0)
 
 
 def main(args: Iterable[str] | None = None) -> None:
+    import faulthandler, sys
+    faulthandler.enable(file=sys.stderr)
     rclpy.init(args=args)
     node = ArucoDetector()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

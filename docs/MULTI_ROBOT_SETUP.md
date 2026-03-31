@@ -176,6 +176,7 @@ Default behavior:
 
 Published outputs:
 - `/a300_00000/aruco_detector/poses`
+- `/a300_00000/aruco_detector/target_pose`
 - `/a300_00000/aruco_detector/markers`
 - `/a300_00000/aruco_detector/debug_image`
 - TF frames like `aruco_marker_0` in the observing camera frame
@@ -184,6 +185,50 @@ Standalone detector launch:
 
 ```bash
 ros2 launch autonomy_bringup aruco_detection.launch.py
+```
+
+## Camera + detection + follow workflow
+
+1. Start the two-robot simulation:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /home/prajjwal/clearpath/install/setup.bash
+ros2 launch autonomy_bringup two_robot_aruco.launch.py
+```
+
+2. Open Robot 1's camera or the detector debug view:
+
+```bash
+ros2 run rqt_image_view rqt_image_view /a300_00000/sensors/camera_0/color/image
+ros2 run rqt_image_view rqt_image_view /a300_00000/aruco_detector/debug_image
+```
+
+3. Verify the detector is publishing the rear-marker pose:
+
+```bash
+ros2 topic echo /a300_00000/aruco_detector/target_pose
+```
+
+4. Drive Robot 2 manually with keyboard teleop:
+
+```bash
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
+  -p stamped:=true \
+  -p frame_id:=a300_00001/base_link \
+  -r cmd_vel:=/a300_00001/cmd_vel
+```
+
+5. Once detection looks good, start the follower for Robot 1:
+
+```bash
+ros2 launch autonomy_bringup aruco_follow.launch.py
+```
+
+Or launch the simulation with follower enabled from the start:
+
+```bash
+ros2 launch autonomy_bringup two_robot_aruco.launch.py launch_aruco_follower:=true
 ```
 
 ---
