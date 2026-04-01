@@ -1,0 +1,206 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+
+    # ── Ground grid ──────────────────────────────────────────────────────────
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 50
+      Reference Frame: <Fixed Frame>
+
+    # ── TF (Robot 2 tree — map frame comes from SLAM for Robot 2) ────────────
+    # NOTE: Both robots publish non-namespaced frames (base_link, odom, …)
+    # to their own /a300_000X/tf topic.  RViz is remapped to /a300_00001/tf
+    # so it sees Robot 2's tree only.  Robot 1 is not visible here — see
+    # Gazebo for Robot 1 position.
+    - Class: rviz_default_plugins/TF
+      Name: TF (Robot 2 leader)
+      Enabled: true
+      Show Arrows: false
+      Show Axes: true
+      Show Names: false
+      Update Interval: 0
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+
+    # ── Robot 2 model (LEADER — has ArUco marker on rear) ────────────────────
+    - Class: rviz_default_plugins/RobotModel
+      Name: "Robot 2 — LEADER (a300_00001)"
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /a300_00001/robot_description
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Robot Description: robot_description
+
+    # ── SLAM map (Robot 2) ───────────────────────────────────────────────────
+    - Class: rviz_default_plugins/Map
+      Name: "Map (Robot 2 SLAM — /a300_00001/map)"
+      Enabled: true
+      Topic:
+        Value: /a300_00001/map
+        Depth: 1
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Alpha: 0.7
+      Color Scheme: map
+      Draw Behind: false
+      Update Topic:
+        Value: /a300_00001/map_updates
+
+    # ── Path displays (Robot 2 planner output) ───────────────────────────────
+    - Class: rviz_default_plugins/Path
+      Name: "Path — A* (green)"
+      Enabled: true
+      Topic:
+        Value: /planned_path_astar
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 0; 220; 80
+      Alpha: 0.8
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.03}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Path — Hybrid-A* (cyan)"
+      Enabled: true
+      Topic:
+        Value: /planned_path_hybrid_astar
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 0; 200; 255
+      Alpha: 0.8
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.06}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Path — RRT* (orange)"
+      Enabled: true
+      Topic:
+        Value: /planned_path_rrtstar
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 255; 140; 0
+      Alpha: 0.8
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.09}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Path — SELECTED (white — Robot 2 follows this)"
+      Enabled: true
+      Topic:
+        Value: /planned_path
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 255; 255; 255
+      Alpha: 1.0
+      Line Style: Lines
+      Line Width: 0.07
+      Offset: {X: 0, Y: 0, Z: 0.12}
+      Pose Style: None
+      Buffer Length: 1
+
+    - Class: rviz_default_plugins/Path
+      Name: "Actual Trajectory — Robot 2 (yellow)"
+      Enabled: true
+      Topic:
+        Value: /actual_trajectory
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 255; 220; 0
+      Alpha: 1.0
+      Line Style: Lines
+      Line Width: 0.06
+      Offset: {X: 0, Y: 0, Z: 0.15}
+      Pose Style: None
+      Buffer Length: 1
+
+    # ── Planner debug markers ────────────────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: PlannerDebug (start=green, goal=red)
+      Enabled: true
+      Topic:
+        Value: /planner_debug
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+
+    # ── Robot 2 LiDAR scan (obstacle detection cone) ─────────────────────────
+    - Class: rviz_default_plugins/LaserScan
+      Name: "LiDAR — Robot 2 LEADER (red)"
+      Enabled: true
+      Topic:
+        Value: /a300_00001/sensors/lidar2d_0/scan
+        Depth: 5
+        Reliability Policy: Best Effort
+      Size (m): 0.03
+      Color Transformer: FlatColor
+      Color: 255; 60; 0
+
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal_pose
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 25.0
+      Focal Point: {X: 0, Y: 0, Z: 0}
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 1.0472
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz)
+      Yaw: 0.0
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1440
+  X: 0
+  Y: 0
