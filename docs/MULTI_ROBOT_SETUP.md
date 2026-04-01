@@ -222,7 +222,12 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
 5. Once detection looks good, start the follower for Robot 1:
 
 ```bash
-ros2 launch autonomy_bringup aruco_follow.launch.py
+# target_timeout_s:=2.0 is required — Gazebo camera publishes at ~1 Hz under
+# load, which is longer than the 0.5 s default timeout.
+ros2 launch autonomy_bringup aruco_follow.launch.py target_timeout_s:=2.0
+
+# Adjust standoff distance (default 1.5 m):
+ros2 launch autonomy_bringup aruco_follow.launch.py target_timeout_s:=2.0 desired_standoff_m:=2.0
 ```
 
 Or launch the simulation with follower enabled from the start:
@@ -264,4 +269,41 @@ ls /home/prajjwal/clearpath/autonomy_bringup/models/aruco_marker_0/materials/tex
   under namespace `a300_00001`.  Check that the node is running:
 ```bash
 ros2 node list | grep a300_00001
+```
+
+**`aruco_detector` crashes with SIGSEGV**
+→ The crash is caused by mixing OpenCV's new-style `Dictionary` object
+  (from `getPredefinedDictionary`) with the old-style `detectMarkers` function.
+  These are different C++ types in the same namespace — passing the wrong one
+  segfaults in C++. The fix (already applied in `aruco_detector.py`) is to use
+  a single `_USE_NEW_ARUCO_API` flag so both dictionary and detector always use
+  the same API generation. If you see this crash again after modifying
+  `aruco_detector.py`, ensure `_load_dictionary` and `_make_detector` use the
+  same API check.
+
+**`platform_velocity_controller` for a300_00001 is `inactive` after launch**
+→ The spawner occasionally races with an already-activating controller, gets an
+  "already active" error, aborts, and leaves the controller inactive. Reactivate
+  it manually:
+```bash
+ros2 control switch_controllers --activate platform_velocity_controller --controller-manager /a300_00001/controller_manager
+```
+
+**Follower stops frequently / "target timed out" log spam**
+→ Under Gazebo load the camera publishes at ~1 Hz. The default
+  `target_timeout_s=0.5` is shorter than the inter-frame gap, so the follower
+  sees the target as lost between frames. Always launch the follower with:
+```bash
+ros2 launch autonomy_bringup aruco_follow.launch.py target_timeout_s:=2.0
+```
+
+**Robot 2 does not move with teleop keyboard**
+→ The teleop command must be on a single line — backslash continuation fails:
+```bash
+# Correct (all one line):
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true -p frame_id:=a300_00001/base_link -r cmd_vel:=/a300_00001/cmd_vel
+```
+Also verify the controller is active:
+```bash
+ros2 control list_controllers --controller-manager /a300_00001/controller_manager
 ```
