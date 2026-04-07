@@ -34,6 +34,7 @@ setup(
     entry_points={
         'console_scripts': [
             'plot_localisation = autonomy_bringup.plot_localisation:main',
+            'plot_controller_compare = autonomy_bringup.plot_controller_compare:main',
             'aruco_detector = autonomy_bringup.aruco_detector:main',
             'aruco_follower = autonomy_bringup.aruco_follower:main',
         ],

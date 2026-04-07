@@ -25,7 +25,36 @@ pip3 install transforms3d scipy
 
 ## Running the System
 
-**Multi-robot simulation (2 × A300, Robot 2 has rear ArUco marker) — single command:**
+### Integrated goal-pose + ArUco-follow demo (canonical, single command)
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 launch autonomy_bringup two_robot_goal_follow.launch.py
+```
+
+**Role assignment:**
+- **Robot 2 (`a300_00001`) = LEADER** — receives `2D Goal Pose` from RViz → custom planner (A*/Hybrid-A*/RRT*) → custom path follower + obstacle avoidance → drives
+- **Robot 1 (`a300_00000`) = FOLLOWER** — forward camera detects Robot 2's rear ArUco marker → ArUco follower drives Robot 1 to trail behind Robot 2
+
+**Workflow once up (~15 s after launch):**
+1. Open RViz (launched automatically).
+2. Click **`2D Goal Pose`** anywhere on the map — Robot 2 plans and drives there.
+3. Robot 1 follows Robot 2 automatically once the ArUco marker is in view.
+
+**Optional args:**
+```bash
+ros2 launch autonomy_bringup two_robot_goal_follow.launch.py \
+    follower_desired_standoff_m:=2.0 \
+    follower_target_timeout_s:=2.0 \
+    launch_slam:=false          # if SLAM already running in another terminal
+```
+
+Timeline: Gazebo + Robot 1 generators at t=0 → Robot 2 at t=8 s → Robot 1 at ~t=10 s → SLAM + ArUco detector at t=12 s → autonomy stack + ArUco follower + RViz at t=14 s.
+
+---
+
+### ArUco-only demo (no goal-pose autonomy)
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -36,7 +65,7 @@ ros2 launch autonomy_bringup two_robot_aruco.launch.py
 Spawning sequence: Gazebo + Robot 1 generators at t=0 → Robot 2 platform+sensors+spawn at t=8 s → Robot 1 spawns at ~t=10 s (generators finish) → both robots fully up by ~t=12 s.
 See `docs/MULTI_ROBOT_SETUP.md` for details, customisation args, and troubleshooting.
 
-> **Do NOT use `multi_robot_simulation.launch.py` or `working_multi_robot.launch.py`** — both are broken (namespace collision, Gazebo never starts). Use `two_robot_aruco.launch.py`.
+> **Do NOT use `multi_robot_simulation.launch.py` or `working_multi_robot.launch.py`** — both are broken (namespace collision, Gazebo never starts).
 
 **ArUco marker follow workflow** (after the simulation is up):
 

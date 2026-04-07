@@ -51,6 +51,9 @@ Optional args
   launch_rviz                         (default true)
   launch_slam                         (default true) — set false if SLAM already running
   launch_aruco_follower               (default true)
+  controller_type                     (default lqr)
+  controller_compare_mode             (default false)
+  launch_controller_plot              (default false)
   follower_desired_standoff_m         (default 1.5)
   follower_target_timeout_s           (default 2.0)
 
@@ -105,6 +108,11 @@ def generate_launch_description():
                               description='Launch SLAM for Robot 2 (leader). '
                                           'Set false if SLAM is already running.'),
         DeclareLaunchArgument('launch_aruco_follower', default_value='true',
+                              choices=['true', 'false']),
+        DeclareLaunchArgument('controller_type', default_value='lqr'),
+        DeclareLaunchArgument('controller_compare_mode', default_value='false',
+                              choices=['true', 'false']),
+        DeclareLaunchArgument('launch_controller_plot', default_value='false',
                               choices=['true', 'false']),
         DeclareLaunchArgument('follower_desired_standoff_m', default_value='1.5'),
         DeclareLaunchArgument('follower_target_timeout_s',   default_value='2.0'),
@@ -315,6 +323,8 @@ def generate_launch_description():
                     motion_params,
                     {
                         'use_sim_time':             LaunchConfiguration('use_sim_time'),
+                        'controller_type':          LaunchConfiguration('controller_type'),
+                        'controller_compare_mode':  LaunchConfiguration('controller_compare_mode'),
                         # Robot 2's LiDAR for obstacle detection
                         'scan_topic':               '/a300_00001/sensors/lidar2d_0/scan',
                         # Publish to a Robot-2-namespaced intermediate topic
@@ -347,6 +357,24 @@ def generate_launch_description():
                         # base_frame stays "base_link" — see note above
                     },
                 ],
+            ),
+        ]
+    )
+
+    # ------------------------------------------------- Live compare plot
+    compare_plot = TimerAction(
+        period=16.0,
+        actions=[
+            Node(
+                package='autonomy_bringup',
+                executable='plot_controller_compare',
+                name='controller_compare_plotter',
+                output='screen',
+                condition=IfCondition(LaunchConfiguration('launch_controller_plot')),
+                parameters=[{
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'active_controller': LaunchConfiguration('controller_type'),
+                }],
             ),
         ]
     )
@@ -397,6 +425,7 @@ def generate_launch_description():
     ld.add_action(aruco_detector)
     ld.add_action(aruco_follower)
     ld.add_action(autonomy_stack)
+    ld.add_action(compare_plot)
     ld.add_action(rviz)
 
     return ld

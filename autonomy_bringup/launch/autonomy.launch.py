@@ -10,6 +10,7 @@ This launch file starts:
   - path_follower      (Stanley/PID/PurePursuit/LQR/MPC controller toward waypoints)
   - twist_mux          (arbitrates between autonomous and teleop cmd_vel)
   - rviz2              (minimal config with map, path, TF, goal tool)
+  - optional live controller-comparison plot
 """
 
 import os
@@ -41,6 +42,12 @@ def generate_launch_description():
         DeclareLaunchArgument('launch_motion',   default_value='true'),
         DeclareLaunchArgument('launch_plot',     default_value='false',
             description='Launch real-time GT vs SLAM localisation plot'),
+        DeclareLaunchArgument('controller_type', default_value='lqr',
+            description='Active controller used by path_follower'),
+        DeclareLaunchArgument('controller_compare_mode', default_value='false',
+            description='Run all 5 controllers each tick and publish /controller_diagnostics'),
+        DeclareLaunchArgument('launch_controller_plot', default_value='false',
+            description='Launch the live controller-comparison plotter'),
 
         LogInfo(msg='=== Autonomy Bringup: starting planner + motion + RViz ==='),
 
@@ -69,7 +76,11 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration('launch_motion')),
             parameters=[
                 LaunchConfiguration('motion_params'),
-                {'use_sim_time': LaunchConfiguration('use_sim_time')},
+                {
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'controller_type': LaunchConfiguration('controller_type'),
+                    'controller_compare_mode': LaunchConfiguration('controller_compare_mode'),
+                },
             ],
             remappings=[
                 ('/tf', '/a300_00000/tf'),
@@ -102,6 +113,21 @@ def generate_launch_description():
             remappings=[
                 ('/tf', '/a300_00000/tf'),
                 ('/tf_static', '/a300_00000/tf_static'),
+            ],
+        ),
+
+        # ---- Live controller comparison plot (optional) ----
+        Node(
+            package='autonomy_bringup',
+            executable='plot_controller_compare',
+            name='controller_compare_plotter',
+            output='screen',
+            condition=IfCondition(LaunchConfiguration('launch_controller_plot')),
+            parameters=[
+                {
+                    'use_sim_time': LaunchConfiguration('use_sim_time'),
+                    'active_controller': LaunchConfiguration('controller_type'),
+                }
             ],
         ),
 
