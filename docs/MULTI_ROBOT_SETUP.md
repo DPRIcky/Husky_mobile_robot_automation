@@ -1,309 +1,250 @@
 # Multi-Robot Simulation Setup
 
-Two Clearpath A300 robots in the Gazebo warehouse world:
-
-| Robot | Namespace | Gazebo model name | ArUco marker |
-|-------|-----------|-------------------|--------------|
-| Robot 1 | `a300_00000` | `a300_00000/robot` | — |
-| Robot 2 | `a300_00001` | `a300_00001/robot` | ID 0, DICT\_4X4\_50, rear-mounted |
-
-The ArUco marker is a **link in Robot 2's URDF** (`aruco_marker_link`) fixed to
-`rear_bumper_mount`. It moves with the robot and is never a separate static
-world model. The marker now renders from a textured mesh asset so Gazebo sees
-an actual ArUco panel instead of a plain white box.
+Two Clearpath A300 robots in Gazebo: Robot 2 (leader) navigates autonomously while Robot 1 (follower) trails using ArUco marker detection with obstacle-aware recovery planning.
 
 ---
 
-## Quick start (one command)
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source /home/prajjwal/clearpath/install/setup.bash
-ros2 launch autonomy_bringup two_robot_aruco.launch.py
-```
-
-Optional arguments:
-
-```bash
-ros2 launch autonomy_bringup two_robot_aruco.launch.py \
-    robot1_x:=-2.5  robot1_y:=0.0 \
-    robot2_x:= 2.5  robot2_y:=0.0 \
-    world:=warehouse
-```
-
----
-
-## What happens at launch
-
-| Time | Event |
-|------|-------|
-| 0 s | Gazebo starts; Robot 1 generators start in parallel |
-| 8 s | Robot 2: platform-service, sensors-service, and `ros_gz_sim create` all fire together (same TimerAction) |
-| ~10 s | Robot 1 generators finish → platform-service + sensors-service + `ros_gz_sim create` fire together |
-
-Robot 1 and Robot 2 end up spawning at roughly the same time (~10 s).
-The reason Robot 2 uses a single TimerAction is to avoid the QoS/timing issue where `ros_gz_sim create` starts 15 s after `robot_state_publisher` and misses the `robot_description` message.
-
----
-
-## Directory layout
+## Directory Layout
 
 ```
 clearpath/
-├── robot.yaml                     # Robot 1 config  (namespace: a300_00000)
-├── robot.urdf.xacro               # Robot 1 URDF    (no marker)
-├── platform/launch/               # Robot 1 generated launch files
-├── sensors/launch/
+├── robot.yaml              # Robot 1 config  (namespace: a300_00000)
+├── robot.urdf.xacro        # Robot 1 URDF    (no marker)
+├── platform/launch/        # Robot 1 generated platform launch files
+├── sensors/launch/         # Robot 1 generated sensor launch files
 │
-├── robot2/                        # Robot 2 setup directory
-│   ├── robot.yaml                 # Robot 2 config  (namespace: a300_00001)
-│   ├── robot.urdf.xacro           # Robot 2 URDF    (ArUco marker embedded)
-│   ├── platform/launch/           # Robot 2 generated launch files
-│   └── sensors/launch/
-│
-└── autonomy_bringup/
-    ├── launch/
-    │   ├── two_robot_aruco.launch.py   ← canonical launch file
-    │   └── aruco_detection.launch.py   ← standalone detector launch
-    └── models/aruco_marker_0/
-        ├── meshes/aruco_marker_panel.obj
-        └── materials/textures/aruco_marker_0.png
+└── robot2/                 # Robot 2 setup (same workspace)
+    ├── robot.yaml              # Robot 2 config  (namespace: a300_00001)
+    ├── robot.urdf.xacro        # Robot 2 URDF    (ArUco marker on rear — do NOT overwrite)
+    ├── platform/launch/        # Robot 2 generated platform launch files
+    └── sensors/launch/         # Robot 2 generated sensor launch files
 ```
+
+> **Important:** Robot 2's `robot.urdf.xacro` has a custom ArUco marker link embedded. If `robot2/robot.yaml` changes, re-run the four Clearpath generators manually and then re-add the marker before building. The canonical launch file uses `generate=false` for Robot 2 to prevent the generator from overwriting the custom URDF.
 
 ---
 
-## ArUco marker details
-
-| Property | Value |
-|----------|-------|
-| Dictionary | DICT\_4X4\_50 |
-| ID | 0 |
-| Face size | 0.4 m × 0.4 m |
-| Thickness | 0.01 m |
-| Parent link | `rear_bumper_mount` |
-| Offset from mount | xyz = (0.05, 0, 0.30) m — 5 cm behind bumper, 30 cm above |
-| Joint type | fixed (moves rigidly with robot) |
-| Visual asset | `package://autonomy_bringup/models/aruco_marker_0/meshes/aruco_marker_panel.obj` |
-
-The marker link is declared in
-`robot2/robot.urdf.xacro` under `<!-- Extras -->`:
-
-```xml
-<link name="aruco_marker_link"> ... </link>
-<joint name="aruco_marker_joint" type="fixed">
-  <parent link="rear_bumper_mount"/>
-  <child  link="aruco_marker_link"/>
-  <origin xyz="0.05 0.0 0.30" rpy="0 0 0"/>
-</joint>
-<visual name="aruco_marker_visual">
-  <geometry>
-    <mesh filename="package://autonomy_bringup/models/aruco_marker_0/meshes/aruco_marker_panel.obj"/>
-  </geometry>
-</visual>
-```
-
----
-
-## Why Robot 2 uses a pre-generated setup directory
-
-The Clearpath generator (`generate_description`) reads `robot2/robot.yaml` and
-**overwrites** `robot2/robot.urdf.xacro`.  Our ArUco marker additions live at
-the bottom of that file. Running the generator again would erase them.
-
-The robot2 files were pre-generated once with:
+## Launch
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-ros2 run clearpath_generator_common generate_description        -s robot2/
-ros2 run clearpath_generator_common generate_semantic_description -s robot2/
-ros2 run clearpath_generator_gz     generate_launch             -s robot2/
-ros2 run clearpath_generator_gz     generate_param              -s robot2/
-```
-
-After that, `robot2/robot.urdf.xacro` was edited to add the marker. The
-canonical launch file uses the generated `robot2/platform/launch` and
-`robot2/sensors/launch` files directly, then spawns Robot 2 with a
-`ros_gz_sim create` node in the `a300_00001` namespace. This preserves the
-custom URDF while avoiding the shared-namespace problems of the stock
-`robot_spawn.launch.py` flow.
-
-If you ever need to regenerate (e.g. after changing `robot2/robot.yaml`):
-
-```bash
-cd /home/prajjwal/clearpath
-source /opt/ros/jazzy/setup.bash
-ros2 run clearpath_generator_common generate_description        -s robot2/
-ros2 run clearpath_generator_common generate_semantic_description -s robot2/
-ros2 run clearpath_generator_gz     generate_launch             -s robot2/
-ros2 run clearpath_generator_gz     generate_param              -s robot2/
-# Then re-add the ArUco marker to robot2/robot.urdf.xacro
-```
-
----
-
-## Topic namespaces
-
-**Robot 1 (`a300_00000`):**
-- `/a300_00000/cmd_vel`
-- `/a300_00000/odom`
-- `/a300_00000/sensors/lidar2d_0/scan`
-- `/a300_00000/sensors/camera_0/color/image`
-- TF root: `a300_00000/base_link`
-
-**Robot 2 (`a300_00001`):**
-- `/a300_00001/cmd_vel`
-- `/a300_00001/odom`
-- `/a300_00001/sensors/lidar2d_0/scan`
-- `/a300_00001/sensors/camera_0/color/image`
-- TF root: `a300_00001/base_link`
-- Extra TF frame: `a300_00001/aruco_marker_link`
-
----
-
-## ArUco detection
-
-This workspace now includes a lightweight OpenCV-based detector node in
-`autonomy_bringup` because there is no preinstalled ROS ArUco package in this
-environment.
-
-Default behavior:
-- `two_robot_aruco.launch.py` starts the detector automatically after both
-  robots come up
-- Detector watches Robot 1's front camera:
-  `/a300_00000/sensors/camera_0/color/image`
-- Camera info topic:
-  `/a300_00000/sensors/camera_0/color/camera_info`
-
-Published outputs:
-- `/a300_00000/aruco_detector/poses`
-- `/a300_00000/aruco_detector/target_pose`
-- `/a300_00000/aruco_detector/markers`
-- `/a300_00000/aruco_detector/debug_image`
-- TF frames like `aruco_marker_0` in the observing camera frame
-
-Standalone detector launch:
-
-```bash
-ros2 launch autonomy_bringup aruco_detection.launch.py
-```
-
-## Camera + detection + follow workflow
-
-1. Start the two-robot simulation:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source /home/prajjwal/clearpath/install/setup.bash
+source install/setup.bash
 ros2 launch autonomy_bringup two_robot_aruco.launch.py
 ```
 
-2. Open Robot 1's camera or the detector debug view:
+After ~16 seconds, drive Robot 2:
 
 ```bash
-ros2 run rqt_image_view rqt_image_view /a300_00000/sensors/camera_0/color/image
-ros2 run rqt_image_view rqt_image_view /a300_00000/aruco_detector/debug_image
+ros2 run teleop_twist_keyboard teleop_twist_keyboard \
+    --ros-args -p stamped:=true -p frame_id:=a300_00001/base_link \
+    -r cmd_vel:=/a300_00001/cmd_vel
 ```
 
-3. Verify the detector is publishing the rear-marker pose:
+Robot 1 follows automatically once the ArUco marker is in view.
 
-```bash
-ros2 topic echo /a300_00000/aruco_detector/target_pose
+---
+
+## Startup Timeline
+
+| Time | Event |
+|------|-------|
+| t=0 s | Gazebo starts; Robot 1 Clearpath generators begin |
+| t=8 s | Robot 2 platform-service, sensors-service, and Gazebo spawn all start |
+| t~10 s | Robot 1 generators finish → Robot 1 spawned in Gazebo |
+| t=12 s | SLAM for Robot 1 (`/a300_00000/map`, `map→odom` TF) |
+| t=12 s | ArUco detector on Robot 1 camera |
+| t=13 s | ArUco Kalman tracker + camera optical frame static TF |
+| t=15 s | ArUco goal manager (3 s after SLAM for TF warm-up) |
+| t=16 s | Full following stack (visual follower + planner + path follower + twist mux) |
+| t=17 s | RViz ArUco debug view |
+
+---
+
+## Full Following Pipeline
+
+### ArUco Visual Following (marker visible)
+
+```
+Camera → ArUco Detector → ArUco Tracker (KF) → ArUco Follower
+                                                     │
+                                    /a300_00000/aruco_follower/cmd_vel
+                                                     │
+                                                 Twist Mux  ──► /a300_00000/cmd_vel
 ```
 
-4. Drive Robot 2 manually with keyboard teleop:
+The visual follower uses a proportional controller on camera-frame lateral error (steering) and depth error (forward speed). It publishes to the twist_mux **teleop slot** which has highest priority.
 
-```bash
-ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args \
-  -p stamped:=true \
-  -p frame_id:=a300_00001/base_link \
-  -r cmd_vel:=/a300_00001/cmd_vel
+### Obstacle-Aware Recovery (marker out of view)
+
+```
+ArUco Tracker (status="predicted"/"lost")
+       │
+       ▼
+ArUco Goal Manager  ──── freezes last odom pose ────► odom→map TF ──► frozen goal (map frame)
+       │                                                                      │
+       │  nav_mode="planned"                                                  ▼
+       │                                                         Trajectory Planner (A*)
+       ▼                                                                      │
+ArUco Follower goes completely silent                                         ▼
+(no cmd_vel published)                                                  Path Follower
+                                                                              │
+                                               /a300_00000/aruco_autonomous/cmd_vel
+                                                                              │
+                                                                          Twist Mux
+                                                              (1.5s teleop timeout fires)
+                                                                              │
+                                                                    /a300_00000/cmd_vel
 ```
 
-5. Once detection looks good, start the follower for Robot 1:
+### Reacquisition (marker visible again)
 
-```bash
-# target_timeout_s:=2.0 is required — Gazebo camera publishes at ~1 Hz under
-# load, which is longer than the 0.5 s default timeout.
-ros2 launch autonomy_bringup aruco_follow.launch.py target_timeout_s:=2.0
-
-# Adjust standoff distance (default 1.5 m):
-ros2 launch autonomy_bringup aruco_follow.launch.py target_timeout_s:=2.0 desired_standoff_m:=2.0
 ```
-
-Or launch the simulation with follower enabled from the start:
-
-```bash
-ros2 launch autonomy_bringup two_robot_aruco.launch.py launch_aruco_follower:=true
+ArUco Tracker (status="measured" × 3 consecutive ticks)
+       │
+       ▼
+ArUco Goal Manager  →  nav_mode="visual"
+       │
+       ▼
+ArUco Follower resumes → Twist Mux teleop slot wins immediately
 ```
 
 ---
 
-## Root causes of the previous broken setup
+## State Machine (aruco_goal_manager)
 
-| Bug | Location | Effect |
-|-----|----------|--------|
-| Both markers used `MODEL_NAME = 'aruco_marker_0'` | `spawn_multi_aruco_markers.py` | Gazebo rejected second spawn — name collision |
-| Markers were `<static>true</static>` world objects | `spawn_multi_aruco_markers.py` | Markers sat at fixed world coords, never moved with any robot |
-| `robot_spawn.launch.py` reads namespace from `robot.yaml`, ignores the `namespace` arg | `clearpath_gz/launch/robot_spawn.launch.py` | Both robots got `a300_00000` — namespace collision |
-| `gz_sim` action never added to `LaunchDescription` | `working_multi_robot.launch.py` | Gazebo never started |
+| State | nav_mode | Condition to enter | Motion authority |
+|-------|----------|--------------------|-----------------|
+| `VISUAL_FOLLOW` | `"visual"` | Startup, or ArUco stably reacquired (3 consecutive "measured" ticks) | ArUco visual follower |
+| `PLANNED_NAV` | `"planned"` | Tracker becomes "predicted" or "lost"; valid odom pose + map TF available | Path follower via A* |
+| `NAV_STALE` | `"idle"` | `nav_timeout_s` elapsed without reacquisition | All motion stopped |
+
+**Startup guard:** Goal manager refuses to enter `PLANNED_NAV` until at least one genuine `"measured"` detection has been received. This prevents the robot from attempting planned navigation before the visual follower has even started.
+
+**Reacquisition hysteresis:** Three consecutive `"measured"` ticks (600 ms at 5 Hz update rate) required before `PLANNED_NAV → VISUAL_FOLLOW`. This avoids oscillation caused by the 1 Hz Gazebo camera where the tracker briefly dips to `"predicted"` between detection frames.
+
+---
+
+## Command Arbitration (twist_mux)
+
+| Slot | Topic | Priority | Timeout |
+|------|-------|----------|---------|
+| Teleop | `/a300_00000/aruco_follower/cmd_vel` | High | 1.5 s |
+| Autonomous | `/a300_00000/aruco_autonomous/cmd_vel` | Low | — |
+
+When `nav_mode = "planned"`, the ArUco follower publishes nothing. After 1.5 s of silence the mux teleop slot times out and the autonomous slot (path follower) takes command. No explicit lock needed — priority is handled purely by timeout.
+
+---
+
+## Key Topics
+
+| Topic | Type | Publisher | Subscriber(s) |
+|-------|------|-----------|---------------|
+| `/a300_00000/aruco_detector/target_pose` | `PoseStamped` | aruco_detector | aruco_tracker |
+| `/a300_00000/aruco_tracker/tracked_pose` | `PoseStamped` | aruco_tracker | aruco_follower |
+| `/a300_00000/aruco_tracker/tracked_pose_odom` | `PoseStamped` | aruco_tracker | aruco_goal_manager |
+| `/a300_00000/aruco_tracker/status` | `String` | aruco_tracker | aruco_follower, aruco_goal_manager |
+| `/a300_00000/aruco_tracker/target_marker` | `Marker` | aruco_tracker | RViz |
+| `/a300_00000/aruco_tracker/predicted_path_odom` | `Path` | aruco_tracker | RViz |
+| `/a300_00000/aruco_goal_manager/nav_mode` | `String` | aruco_goal_manager | aruco_follower |
+| `/a300_00000/aruco_navigation_goal` | `PoseStamped` | aruco_goal_manager | aruco_planner |
+| `/a300_00000/aruco_goal_manager/goal_marker` | `Marker` | aruco_goal_manager | RViz |
+| `/a300_00000/aruco_planned_path` | `Path` | aruco_planner | aruco_path_follower, RViz |
+| `/a300_00000/aruco_follower/cmd_vel` | `TwistStamped` | aruco_follower | aruco_twist_mux (teleop slot) |
+| `/a300_00000/aruco_autonomous/cmd_vel` | `TwistStamped` | aruco_path_follower | aruco_twist_mux (autonomous slot) |
+| `/a300_00000/cmd_vel` | `TwistStamped` | aruco_twist_mux | platform_velocity_controller |
+| `/a300_00000/map` | `OccupancyGrid` | slam_toolbox | aruco_planner |
+
+---
+
+## Launch Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `use_sim_time` | `true` | Use Gazebo clock |
+| `world` | `warehouse` | Gazebo world name |
+| `robot1_x/y/yaw` | `0 0 0` | Robot 1 start pose |
+| `robot2_x/y/yaw` | `5 0 0` | Robot 2 start pose |
+| `launch_slam` | `true` | SLAM for Robot 1; set `false` if running separately |
+| `launch_aruco_detector` | `true` | ArUco OpenCV detector |
+| `launch_aruco_follower` | `true` | Full following stack (tracker + follower + goal manager + planner + path follower + mux) |
+| `launch_rviz` | `true` | RViz ArUco debug view |
+| `follower_desired_standoff_m` | `1.5` | Visual servo standoff distance (m) |
+| `nav_timeout_s` | `30.0` | Max time to pursue frozen goal after ArUco loss |
+| `detector_marker_length_m` | `0.4` | ArUco marker side length (m) — must match simulation |
+
+---
+
+## Collision Protection
+
+Two independent mechanisms prevent Robot 1 from colliding with Robot 2:
+
+1. **Hard minimum approach distance** (`min_approach_dist_m = 1.2 m`): Visual servo stops unconditionally when the camera-frame marker depth falls below this value. Active regardless of standoff setting or controller state.
+
+2. **Planned-nav goal tolerance** (`goal_tolerance = 1.5 m`): Path follower stops at the same radius as the visual servo standoff. Planned navigation never drives Robot 1 closer than intended.
+
+Both parameters can be adjusted in the launch file.
+
+---
+
+## RViz Displays (aruco_debug.rviz)
+
+Fixed frame: `map` (provided by SLAM via `/a300_00000/tf`).
+
+| Display | Topic | Colour | Purpose |
+|---------|-------|--------|---------|
+| Robot Model | `/a300_00000/robot_description` | — | Robot 1 chassis |
+| SLAM Map | `/a300_00000/map` | Grey | Live occupancy grid |
+| LiDAR | `/a300_00000/sensors/lidar2d_0/scan` | Cyan | Obstacle sensor |
+| ArUco Target Sphere | `/a300_00000/aruco_tracker/target_marker` | Red (live) / Orange (KF) | Tracker position |
+| KF Rollout Path | `/a300_00000/aruco_tracker/predicted_path_odom` | Magenta | Kinematic prediction (debug only) |
+| Planned Path | `/a300_00000/aruco_planned_path` | Green | Obstacle-aware A* path |
+| Nav Goal Cylinder | `/a300_00000/aruco_goal_manager/goal_marker` | Green | Frozen goal during PLANNED_NAV |
 
 ---
 
 ## Troubleshooting
 
-**Robot 2 spawns with wrong namespace / no marker**
-→ Verify `robot2/robot.yaml` has `namespace: a300_00001` and
-  `robot2/robot.urdf.xacro` contains `aruco_marker_link`.
-
-**ArUco texture not visible in Gazebo**
-→ Confirm the PNG exists:
+### Robot 2 platform_velocity_controller inactive
 ```bash
-ls /home/prajjwal/clearpath/autonomy_bringup/models/aruco_marker_0/materials/textures/
+ros2 control switch_controllers \
+    --activate platform_velocity_controller \
+    --controller-manager /a300_00001/controller_manager
 ```
 
-**"Model already exists" error**
-→ Restart Gazebo — a previous run left the model in the world.
+### ArUco follower not moving / always in "planned" mode
+- Verify camera image is publishing: `ros2 topic hz /a300_00000/sensors/camera_0/color/image`
+- Check nav_mode: `ros2 topic echo /a300_00000/aruco_goal_manager/nav_mode`
+- If stuck in `"planned"`: goal manager entered planned state before the follower started. Restart with `launch_aruco_follower:=true` (default).
 
-**TF tree missing robot 2 frames**
-→ Robot 2's `platform-service.launch.py` publishes `robot_state_publisher`
-  under namespace `a300_00001`.  Check that the node is running:
-```bash
-ros2 node list | grep a300_00001
-```
+### No planned path (green line missing in RViz)
+- Check SLAM: `ros2 topic hz /a300_00000/map` — should be ~1 Hz after t=12 s
+- Check planner node: `ros2 node info /aruco_planner`
+- Confirm `map→odom` TF: `ros2 run tf2_ros tf2_echo --ros-args -r /tf:=/a300_00000/tf map odom`
 
-**`aruco_detector` crashes with SIGSEGV**
-→ The crash is caused by mixing OpenCV's new-style `Dictionary` object
-  (from `getPredefinedDictionary`) with the old-style `detectMarkers` function.
-  These are different C++ types in the same namespace — passing the wrong one
-  segfaults in C++. The fix (already applied in `aruco_detector.py`) is to use
-  a single `_USE_NEW_ARUCO_API` flag so both dictionary and detector always use
-  the same API generation. If you see this crash again after modifying
-  `aruco_detector.py`, ensure `_load_dictionary` and `_make_detector` use the
-  same API check.
+### Tracker never shows "measured"
+- Gazebo camera publishes at ~1 Hz under load — this is expected
+- Check detector: `ros2 topic hz /a300_00000/aruco_detector/target_pose`
+- Ensure Robot 2 is within camera FOV (start position x=5 m; marker on rear)
 
-**`platform_velocity_controller` for a300_00001 is `inactive` after launch**
-→ The spawner occasionally races with an already-activating controller, gets an
-  "already active" error, aborts, and leaves the controller inactive. Reactivate
-  it manually:
-```bash
-ros2 control switch_controllers --activate platform_velocity_controller --controller-manager /a300_00001/controller_manager
-```
+### RViz "Fixed Frame [map] does not exist"
+- SLAM has not initialised yet. Wait until t~14 s for the first `map→odom` transform.
+- Check: `ros2 topic echo /a300_00000/map --once`
 
-**Follower stops frequently / "target timed out" log spam**
-→ Under Gazebo load the camera publishes at ~1 Hz. The default
-  `target_timeout_s=0.5` is shorter than the inter-frame gap, so the follower
-  sees the target as lost between frames. Always launch the follower with:
-```bash
-ros2 launch autonomy_bringup aruco_follow.launch.py target_timeout_s:=2.0
-```
+---
 
-**Robot 2 does not move with teleop keyboard**
-→ The teleop command must be on a single line — backslash continuation fails:
-```bash
-# Correct (all one line):
-ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true -p frame_id:=a300_00001/base_link -r cmd_vel:=/a300_00001/cmd_vel
-```
-Also verify the controller is active:
-```bash
-ros2 control list_controllers --controller-manager /a300_00001/controller_manager
-```
+## Design Notes
+
+### Why two separate cmd_vel topics?
+The original design published directly to `/a300_00000/cmd_vel`. The new design uses separate topics for visual servo and planned navigation, routed through a dedicated twist_mux. This means:
+- Switching between modes requires no explicit coordination — timeout-based priority handles it
+- Both nodes can run continuously without conflict
+- teleop (PS4 controller or keyboard) can override everything at any time by publishing to the teleop slot
+
+### Why A* instead of Hybrid-A* for ArUco recovery?
+Hybrid-A* produces smoother paths but takes 200–500 ms for short recovery paths. A* completes in under 50 ms. Since ArUco recovery paths are short (robot is never far from the predicted goal), A* is fast enough and avoids planning latency that would cause the robot to overshoot.
+
+### Why decouple nav_timeout_s from prediction_timeout_s?
+The ArUco tracker stops predicting after 10 s (`prediction_timeout_s`). The goal manager continues navigating for up to 30 s (`nav_timeout_s`). This allows the robot to navigate to the last known goal even after the KF prediction has expired — useful when Robot 2 goes around a corner.
+
+### TF remapping
+All nodes that need Robot 1's TF tree remap `/tf → /a300_00000/tf` and `/tf_static → /a300_00000/tf_static`. This is required because ROS 2 tf2 uses absolute topic names (`/tf`, `/tf_static`) regardless of node namespace. Without remapping, nodes would merge all robots' transforms into one tree.

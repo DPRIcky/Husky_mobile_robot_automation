@@ -1,145 +1,231 @@
-# Husky Mobile Robot Automation
+# Clearpath A300 Autonomous Navigation
 
-A comprehensive ROS 2 Jazzy workspace for the Clearpath A300 (Husky) mobile robot platform featuring multi-robot simulation, ArUco-based robot following, path planning, and advanced sensor fusion.
-
-## Overview
-
-This repository contains a complete robotics system for the Clearpath A300 outdoor mobile robot, including:
-- **Multi-Robot Simulation**: Two A300 robots in Gazebo — one leads, one follows using visual marker tracking
-- **ArUco Marker Following**: Robot 1 autonomously tracks and follows Robot 2 using its front camera and an ArUco marker mounted on Robot 2's rear
-- **Path Planning**: A*, Hybrid-A*, and RRT* planners on occupancy grid with path smoothing
-- **Path Following**: 5 selectable controllers (Stanley, Pure Pursuit, PID, LQR, MPC)
-- **State Estimation**: Multiple Kalman filter implementations (EKF, UKF, Particle Filter)
-- **Sensor Integration**: IMU, GPS, Lidar, Camera, and Wheel Odometry
-
-## Repository Structure
-
-```
-clearpath/
-├── robot.yaml              # Robot 1 config (namespace: a300_00000)
-├── robot.urdf.xacro        # Robot 1 URDF (no marker)
-├── platform/launch/        # Robot 1 generated platform launch files
-├── sensors/launch/         # Robot 1 generated sensor launch files
-│
-├── robot2/                 # Robot 2 setup
-│   ├── robot.yaml              # Robot 2 config (namespace: a300_00001)
-│   ├── robot.urdf.xacro        # Robot 2 URDF (ArUco marker embedded on rear)
-│   ├── platform/launch/
-│   └── sensors/launch/
-│
-├── autonomy_bringup/       # Main autonomy package
-│   ├── launch/
-│   │   ├── two_robot_aruco.launch.py   # Canonical multi-robot launch
-│   │   ├── aruco_detection.launch.py   # Standalone detector
-│   │   ├── aruco_follow.launch.py      # Standalone follower
-│   │   └── autonomy.launch.py          # Single-robot planning stack
-│   ├── autonomy_bringup/
-│   │   ├── aruco_detector.py           # OpenCV ArUco detector node
-│   │   └── aruco_follower.py           # Visual following controller node
-│   └── models/aruco_marker_0/          # ArUco marker mesh + texture
-│
-├── trajectory_planner_pkg/ # A*, Hybrid-A*, RRT* path planners
-├── simple_motion_pkg/      # Path following controllers + twist mux
-├── state_estimation/       # Standalone EKF/UKF/Particle Filter scripts
-├── navigation/             # Nav2 integration + waypoint navigator
-├── sensors/                # Sensor configs and launch files
-├── platform/               # Platform control launch files
-└── docs/                   # Detailed documentation
-    ├── MULTI_ROBOT_SETUP.md
-    ├── SYSTEM_OVERVIEW.md
-    └── PROJECT_REPORT.md
-```
+ROS 2 Jazzy workspace for autonomous navigation and multi-robot coordination on Clearpath A300 platforms.
 
 ## Quick Start
 
-### Prerequisites
-
-```bash
-sudo apt install ros-jazzy-desktop ros-jazzy-clearpath-gz ros-jazzy-nav2-bringup
-pip3 install transforms3d scipy
-```
-
-### Multi-Robot ArUco Follow (primary demo)
-
-Two A300 robots spawn in the Gazebo warehouse world. Robot 2 carries an ArUco marker on its rear bumper. Robot 1 detects and follows it.
-
 ```bash
 source /opt/ros/jazzy/setup.bash
+colcon build
 source install/setup.bash
+```
+
+---
+
+## Two-Robot ArUco Follow Demo (Canonical)
+
+One robot follows another using ArUco marker detection with full obstacle-aware recovery navigation.
+
+```bash
 ros2 launch autonomy_bringup two_robot_aruco.launch.py
 ```
 
-After ~13 s both robots are fully up. Then in separate terminals:
+**Role assignment:**
+- **Robot 2 (`a300_00001`) = LEADER** — drive with teleop; ArUco marker on rear bumper
+- **Robot 1 (`a300_00000`) = FOLLOWER** — camera detects marker, follows with visual servo; falls back to obstacle-aware A* path planning when marker is lost
 
-**Drive Robot 2** (the one being followed):
+**Startup timeline:**
+
+| Time | Event |
+|------|-------|
+| t=0 s | Gazebo starts, Robot 1 generators start |
+| t=8 s | Robot 2 (platform + sensors + spawn) |
+| t~10 s | Robot 1 spawned in Gazebo |
+| t=12 s | SLAM for Robot 1 + ArUco detector |
+| t=13 s | ArUco Kalman tracker + camera optical frame TF |
+| t=15 s | ArUco goal manager |
+| t=16 s | Visual follower + planner + path follower + twist mux |
+| t=17 s | RViz (ArUco debug view) |
+
+**Drive the leader after ~16 s:**
+
 ```bash
 ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true -p frame_id:=a300_00001/base_link -r cmd_vel:=/a300_00001/cmd_vel
 ```
 
-**Start Robot 1 follower**:
-```bash
-ros2 launch autonomy_bringup aruco_follow.launch.py target_timeout_s:=2.0
-```
+**Optional launch arguments:**
 
-Robot 1 will drive toward Robot 2, maintain a ~1.5 m standoff, and steer to keep the marker centered. Adjust standoff with `desired_standoff_m:=2.0`.
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `follower_desired_standoff_m` | `1.5` | Standoff distance (m) from leader |
+| `nav_timeout_s` | `30.0` | Max seconds to pursue frozen goal after ArUco lost |
+| `launch_slam` | `true` | Set `false` if SLAM already running |
+| `launch_rviz` | `true` | Open RViz ArUco debug view |
+| `robot2_x` / `robot2_y` | `5.0` / `0.0` | Leader start pose |
+| `world` | `warehouse` | Gazebo world |
 
-Launch with follower enabled from the start:
-```bash
-ros2 launch autonomy_bringup two_robot_aruco.launch.py launch_aruco_follower:=true
-```
-
-See [docs/MULTI_ROBOT_SETUP.md](docs/MULTI_ROBOT_SETUP.md) for full details, customisation args, and troubleshooting.
-
-### Single-Robot Path Planning
+Example with custom standoff:
 
 ```bash
-# Terminal 1: Gazebo simulation
-ros2 launch clearpath_gz simulation.launch.py setup_path:=/home/prajjwal/clearpath
-
-# Terminal 2: SLAM mapping
-ros2 launch clearpath_nav2_demos slam.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
-
-# Terminal 3: Autonomy (planner + controller + RViz)
-ros2 launch autonomy_bringup autonomy.launch.py use_sim_time:=true
+ros2 launch autonomy_bringup two_robot_aruco.launch.py \
+    follower_desired_standoff_m:=2.0 \
+    nav_timeout_s:=45.0
 ```
-
-### State Estimation (standalone)
-
-```bash
-python3 state_estimation/sensor_fusion_ekf.py   # EKF
-python3 state_estimation/sensor_fusion_ukf.py   # UKF
-python3 state_estimation/sensor_fusion_pf.py    # Particle Filter
-python3 state_estimation/compare_filters.py     # Run all three + compare
-```
-
-## Features
-
-- Multi-robot Gazebo simulation (2 × Clearpath A300)
-- Vision-based robot following via ArUco marker detection (OpenCV, no external ROS package needed)
-- Path planning: A*, Hybrid-A*, RRT* on live occupancy grid
-- 5 path following controllers: Stanley, Pure Pursuit, PID, LQR, MPC
-- Multi-sensor state estimation: EKF, UKF, Particle Filter (8-state: x, y, θ, vx, vy, ω, ax, ay)
-- SLAM-based mapping with Nav2 integration
-- Waypoint-based mission planning (single, loop, patrol modes)
-
-## Robot Specifications
-
-- **Platform**: Clearpath A300 (4-wheel differential drive)
-- **Wheel Radius**: 0.1625 m, **Wheel Separation**: 0.562 m
-- **Serial**: a300-00000, **IP**: 192.168.131.1
-- **Sensors**: Microstrain IMU, Garmin GPS, Intel RealSense D435, Hokuyo UST LiDAR
-
-## Documentation
-
-- [docs/MULTI_ROBOT_SETUP.md](docs/MULTI_ROBOT_SETUP.md) — Two-robot ArUco follow setup and troubleshooting
-- [docs/SYSTEM_OVERVIEW.md](docs/SYSTEM_OVERVIEW.md) — Hardware and software architecture
-- [docs/PROJECT_REPORT.md](docs/PROJECT_REPORT.md) — Implementation details and results
-- [navigation/README.md](navigation/README.md) — Nav2 waypoint navigation
-
-## Author
-
-**DPRicky**
 
 ---
 
-*Last Updated: March 2026*
+## Integrated Goal-Pose + ArUco Follow Demo
+
+Robot 2 navigates to clicked goals while Robot 1 trails behind.
+
+```bash
+ros2 launch autonomy_bringup two_robot_goal_follow.launch.py
+```
+
+1. Open RViz (auto-launched).
+2. Click **2D Goal Pose** — Robot 2 plans and drives there.
+3. Robot 1 follows automatically once the ArUco marker is visible.
+
+---
+
+## Single-Robot Simulation
+
+```bash
+# Terminal 1 — Gazebo
+ros2 launch clearpath_gz simulation.launch.py setup_path:=/home/prajjwal/clearpath
+
+# Terminal 2 — SLAM
+ros2 launch clearpath_nav2_demos slam.launch.py use_sim_time:=true setup_path:=/home/prajjwal/clearpath
+
+# Terminal 3 — Autonomy (planner + controller + RViz)
+ros2 launch autonomy_bringup autonomy.launch.py use_sim_time:=true
+```
+
+---
+
+## System Architecture
+
+### Two-Robot ArUco Following Pipeline
+
+```
+ArUco Detector (/a300_00000/aruco_detector/target_pose)
+       │
+       ▼
+ArUco Tracker  — Kalman filter (odom frame)
+   │        │
+   │        └─ tracked_pose_odom ──► ArUco Goal Manager
+   │                                      │ nav_mode ("visual"/"planned"/"idle")
+   │                                      │ aruco_navigation_goal (map frame)
+   │                                      │
+   ▼                                      ▼
+ArUco Follower              Trajectory Planner (A*)
+(visual servo)                     │
+   │                               ▼
+   │                         Path Follower
+   │                               │
+   ▼                               ▼
+ /a300_00000/aruco_follower/cmd_vel    /a300_00000/aruco_autonomous/cmd_vel
+       │                                               │
+       └──────────────┬────────────────────────────────┘
+                      ▼
+                  Twist Mux  (teleop slot wins; falls through on silence)
+                      │
+                      ▼
+              /a300_00000/cmd_vel  →  Platform
+```
+
+**Following modes:**
+
+| Tracker Status | nav_mode | Active Component |
+|---------------|----------|-----------------|
+| `measured` | `visual` | ArUco visual servo (direct camera-frame control) |
+| `predicted` or `lost` | `planned` | Obstacle-aware A* → path follower |
+| Timeout elapsed | `idle` | All motion stopped; waiting for reacquisition |
+
+**Command arbitration (twist_mux):**
+- Teleop slot: `/a300_00000/aruco_follower/cmd_vel` — wins immediately when active
+- Autonomous slot: `/a300_00000/aruco_autonomous/cmd_vel` — wins after 1.5 s teleop silence
+- When `nav_mode = "planned"`, ArUco follower goes completely silent → mux timeout fires → path follower takes command
+
+### Packages
+
+| Package | Role |
+|---------|------|
+| `trajectory_planner_pkg` | Path planning (A*, Hybrid-A*, RRT*) on occupancy grid |
+| `simple_motion_pkg` | Path following with 5 controllers + twist_mux |
+| `autonomy_bringup` | Launch orchestration + ArUco nodes |
+| `navigation` | Nav2 integration + waypoint navigator |
+| `state_estimation` | Standalone EKF/UKF/Particle Filter |
+
+### ArUco Nodes (autonomy_bringup)
+
+| Node | Executable | Role |
+|------|-----------|------|
+| `aruco_detector` | `aruco_detector` | OpenCV detection; publishes camera-frame pose |
+| `aruco_tracker` | `aruco_tracker` | Kalman filter; smooths detections; coasts in odom frame |
+| `aruco_follower` | `aruco_follower` | Visual servo; direct camera-frame P-controller |
+| `aruco_goal_manager` | `aruco_goal_manager` | State machine; bridges tracker → planner |
+
+### Key Topics
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/a300_00000/aruco_detector/target_pose` | `PoseStamped` | Raw camera-frame marker pose |
+| `/a300_00000/aruco_tracker/tracked_pose` | `PoseStamped` | KF-smoothed camera-frame pose |
+| `/a300_00000/aruco_tracker/tracked_pose_odom` | `PoseStamped` | KF pose in odom frame |
+| `/a300_00000/aruco_tracker/status` | `String` | `measured` / `predicted` / `lost` |
+| `/a300_00000/aruco_goal_manager/nav_mode` | `String` | `visual` / `planned` / `idle` |
+| `/a300_00000/aruco_navigation_goal` | `PoseStamped` | Frozen goal for planner (map frame) |
+| `/a300_00000/aruco_planned_path` | `Path` | Obstacle-aware A* path |
+| `/a300_00000/aruco_follower/cmd_vel` | `TwistStamped` | Visual servo commands (twist_mux teleop slot) |
+| `/a300_00000/aruco_autonomous/cmd_vel` | `TwistStamped` | Path follower commands (twist_mux autonomous slot) |
+| `/a300_00000/cmd_vel` | `TwistStamped` | Final command to platform |
+| `/a300_00000/map` | `OccupancyGrid` | SLAM live map for planning |
+
+---
+
+## Collision Protection
+
+The follower maintains a safe standoff from the leader via two mechanisms:
+
+1. **Hard minimum approach distance** (`min_approach_dist_m = 1.2 m`): Visual servo stops unconditionally when the marker depth drops below this value, regardless of standoff setting or controller output.
+
+2. **Planned-nav goal tolerance** (`goal_tolerance = 1.5 m`): Path follower stops at the same distance as the visual servo standoff so planned navigation never drives closer than desired.
+
+---
+
+## Troubleshooting
+
+**Robot 2's `platform_velocity_controller` shows `inactive` after launch:**
+```bash
+ros2 control switch_controllers --activate platform_velocity_controller \
+    --controller-manager /a300_00001/controller_manager
+```
+
+**ArUco follower not moving:**
+- Check that ArUco marker is visible in the camera image (`/a300_00000/sensors/camera_0/color/image`)
+- Check `nav_mode`: `ros2 topic echo /a300_00000/aruco_goal_manager/nav_mode`
+- If stuck in `"planned"`, SLAM may not have initialised (no `map→odom` TF yet); wait a few seconds after t=12 s
+
+**No planned path in RViz (green line missing):**
+- Confirm SLAM is running: `ros2 topic hz /a300_00000/map`
+- Check planner log: `ros2 node info /aruco_planner`
+
+**RViz fixed frame error:**
+- Fixed frame must be `map` (SLAM provides it). Do not change to `odom` — planned path and SLAM map are in map frame.
+
+---
+
+## Robot Hardware
+
+- **Platform**: Clearpath A300, serial `a300-00000`, IP `192.168.131.1`
+- **Sensors**: Microstrain IMU (100 Hz), Garmin 18x GPS (10 Hz), Intel RealSense D435 (30 Hz), Hokuyo UST LiDAR (40 Hz, 270° FOV)
+- **Wheel radius**: 0.1625 m, **Wheel separation**: 0.562 m
+
+---
+
+## Build Notes
+
+Build a single package:
+```bash
+colcon build --packages-select autonomy_bringup
+```
+
+Python dependencies not in rosdep:
+```bash
+pip3 install transforms3d scipy
+```
+
+Do **not** use `multi_robot_simulation.launch.py` or `working_multi_robot.launch.py` — both are broken (namespace collision, Gazebo never starts).
+
+Do **not** re-run Clearpath generators for Robot 2 without re-adding the ArUco marker to `robot2/robot.urdf.xacro`.
