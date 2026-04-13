@@ -1,0 +1,169 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+
+    # ── Ground grid ──────────────────────────────────────────────────────────
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
+      Plane: XY
+      Plane Cell Count: 50
+      Reference Frame: <Fixed Frame>
+
+    # ── TF tree (remapped to /a300_00000/tf in launch) ───────────────────────
+    - Class: rviz_default_plugins/TF
+      Name: TF — Robot 1
+      Enabled: true
+      Show Arrows: false
+      Show Axes: true
+      Show Names: true
+      Update Interval: 0
+      Frame Timeout: 15
+      Frames:
+        All Enabled: true
+
+    # ── Robot 1 model (FOLLOWER) ─────────────────────────────────────────────
+    - Class: rviz_default_plugins/RobotModel
+      Name: "Robot 1 — FOLLOWER (a300_00000)"
+      Enabled: true
+      Description Source: Topic
+      Description Topic:
+        Value: /a300_00000/robot_description
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Robot Description: robot_description
+
+    # ── SLAM occupancy map (Robot 1 live map for obstacle-aware planning) ─────
+    # Published by slam_toolbox once SLAM initialises (~12-16 s after launch).
+    # Fixed frame must be "map" for this to render correctly.
+    - Class: rviz_default_plugins/Map
+      Name: "SLAM Map — Robot 1"
+      Enabled: true
+      Topic:
+        Value: /a300_00000/map
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Alpha: 0.65
+      Color Scheme: map
+      Draw Behind: false
+      Use Timestamp: false
+
+    # ── ArUco target: KF-predicted position (red=measured, orange=predicted) ─
+    # Published by aruco_tracker on ~/target_marker (odom frame).
+    - Class: rviz_default_plugins/Marker
+      Name: "ArUco Target Sphere (red=live, orange=KF predicted)"
+      Enabled: true
+      Topic:
+        Value: /a300_00000/aruco_tracker/target_marker
+        Depth: 10
+        Reliability Policy: Reliable
+
+    # ── KF predicted path in odom frame (kinematic rollout, debug only) ──────
+    # This is a straight-line KF extrapolation — NOT an obstacle-aware path.
+    # Displayed in magenta. The green planned path below is what the robot follows.
+    - Class: rviz_default_plugins/Path
+      Name: "KF Predicted Path — kinematic rollout (magenta)"
+      Enabled: true
+      Topic:
+        Value: /a300_00000/aruco_tracker/predicted_path_odom
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 220; 0; 220
+      Alpha: 0.7
+      Line Style: Lines
+      Line Width: 0.04
+      Offset: {X: 0, Y: 0, Z: 0.05}
+      Pose Style: None
+      Buffer Length: 1
+
+    # ── Obstacle-aware planned path (what Robot 1 actually follows) ───────────
+    # Published by trajectory_planner_pkg/planner_node when ArUco is out of view.
+    # Uses the live SLAM map to route around obstacles.  Green = safe to drive.
+    - Class: rviz_default_plugins/Path
+      Name: "Planned Path — obstacle-aware A*/Hybrid-A* (green)"
+      Enabled: true
+      Topic:
+        Value: /a300_00000/aruco_planned_path
+        Depth: 5
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Color: 0; 220; 80
+      Alpha: 1.0
+      Line Style: Lines
+      Line Width: 0.07
+      Offset: {X: 0, Y: 0, Z: 0.08}
+      Pose Style: None
+      Buffer Length: 1
+
+    # ── Navigation goal marker (frozen ArUco predicted position in map frame) ─
+    # Green cylinder published by aruco_goal_manager during PLANNED_NAV state.
+    # This is the goal the planner routes to when ArUco is not visible.
+    - Class: rviz_default_plugins/Marker
+      Name: "Nav Goal — frozen ArUco target (green cylinder)"
+      Enabled: true
+      Topic:
+        Value: /a300_00000/aruco_goal_manager/goal_marker
+        Depth: 10
+        Reliability Policy: Reliable
+
+    # ── Robot 1 LiDAR ────────────────────────────────────────────────────────
+    - Class: rviz_default_plugins/LaserScan
+      Name: "LiDAR — Robot 1 (cyan)"
+      Enabled: true
+      Topic:
+        Value: /a300_00000/sensors/lidar2d_0/scan
+        Depth: 5
+        Reliability Policy: Best Effort
+      Size (m): 0.03
+      Color Transformer: FlatColor
+      Color: 0; 200; 255
+
+  Global Options:
+    Background Color: 48; 48; 48
+    # Fixed frame is "map" — SLAM provides the map frame via /a300_00000/tf.
+    # Planned path, SLAM map, and nav goal marker are all in map frame.
+    # target_marker (odom frame) and KF path (odom frame) are reachable via
+    # the map→odom→base_link chain that SLAM publishes.
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 25.0
+      Focal Point: {X: 0, Y: 0, Z: 0}
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Pitch: 1.0472
+      Target Frame: map
+      Value: Orbit (rviz)
+      Yaw: 0.0
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Width: 1440
+  X: 0
+  Y: 0

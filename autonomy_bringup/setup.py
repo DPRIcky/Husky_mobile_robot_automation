@@ -37,6 +37,9 @@ setup(
             'plot_controller_compare = autonomy_bringup.plot_controller_compare:main',
             'aruco_detector = autonomy_bringup.aruco_detector:main',
             'aruco_follower = autonomy_bringup.aruco_follower:main',
+            'aruco_tracker = autonomy_bringup.aruco_tracker:main',
+            'aruco_goal_manager = autonomy_bringup.aruco_goal_manager:main',
+            'robot1_tf_republisher = autonomy_bringup.robot1_tf_republisher:main',
         ],
     },
 )

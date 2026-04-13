@@ -8,7 +8,7 @@ path_follower:
     control_rate: 10.0
     scan_topic: "/a300_00000/sensors/lidar2d_0/scan"
     obstacle_warn_dist: 0.80      # slow to 50% speed within this distance (metres)
-    obstacle_stop_dist: 0.50      # stop and replan (must be < inflation_radius_m=0.65)
+    obstacle_stop_dist: 0.40      # stop and replan (must be < inflation_radius_m=0.50)
     obstacle_check_angle: 0.698   # ±40 deg forward cone (radians)
     map_update_delay_s: 2.5       # wait for SLAM map update before replanning
                                   # SLAM toolbox publishes at ~0.5-2 Hz; 2.5s ensures new scan is in map

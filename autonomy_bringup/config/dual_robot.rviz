@@ -20,13 +20,13 @@ Visualization Manager:
       Plane Cell Count: 50
       Reference Frame: <Fixed Frame>
 
-    # ── TF (Robot 2 tree — map frame comes from SLAM for Robot 2) ────────────
-    # NOTE: Both robots publish non-namespaced frames (base_link, odom, …)
-    # to their own /a300_000X/tf topic.  RViz is remapped to /a300_00001/tf
-    # so it sees Robot 2's tree only.  Robot 1 is not visible here — see
-    # Gazebo for Robot 1 position.
+    # ── TF (combined tree: Robot 2 native + Robot 1 prefixed via bridge) ────
+    # Robot 2 frames: base_link, odom, map, … (native, from SLAM)
+    # Robot 1 frames: robot1/base_link, robot1/odom, … (prefixed by bridge)
+    # RViz is remapped to /a300_00001/tf; the robot1_tf_republisher feeds
+    # Robot 1's prefixed frames into that same topic.
     - Class: rviz_default_plugins/TF
-      Name: TF (Robot 2 leader)
+      Name: TF (both robots)
       Enabled: true
       Show Arrows: false
       Show Axes: true
@@ -43,6 +43,21 @@ Visualization Manager:
       Description Source: Topic
       Description Topic:
         Value: /a300_00001/robot_description
+        Depth: 5
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Robot Description: robot_description
+
+    # ── Robot 1 model (FOLLOWER — a300_00000) ────────────────────────────────
+    # TF Prefix "robot1" makes RViz look up robot1/base_link, robot1/chassis_link,
+    # etc. — exactly what the robot1_tf_republisher injects into the TF tree.
+    - Class: rviz_default_plugins/RobotModel
+      Name: "Robot 1 — FOLLOWER (a300_00000)"
+      Enabled: true
+      TF Prefix: robot1
+      Description Source: Topic
+      Description Topic:
+        Value: /a300_00000/robot_description
         Depth: 5
         Durability Policy: Transient Local
         Reliability Policy: Reliable
@@ -165,6 +180,18 @@ Visualization Manager:
       Size (m): 0.03
       Color Transformer: FlatColor
       Color: 255; 60; 0
+
+    # ── Robot 1 LiDAR scan (follower) ────────────────────────────────────────
+    - Class: rviz_default_plugins/LaserScan
+      Name: "LiDAR — Robot 1 FOLLOWER (blue)"
+      Enabled: true
+      Topic:
+        Value: /a300_00000/sensors/lidar2d_0/scan
+        Depth: 5
+        Reliability Policy: Best Effort
+      Size (m): 0.03
+      Color Transformer: FlatColor
+      Color: 0; 120; 255
 
   Global Options:
     Background Color: 48; 48; 48

@@ -193,6 +193,30 @@ def generate_launch_description():
         ]
     )
 
+    # ----------------------------------------- Robot 1 TF bridge (for RViz)
+    # Reads /a300_00000/tf, prefixes all frames with "robot1/", republishes
+    # into /a300_00001/tf so that RViz (remapped to /a300_00001/tf) can see
+    # both robots in the same window without frame-name collisions.
+    robot1_tf_bridge = TimerAction(
+        period=12.0,
+        actions=[
+            LogInfo(msg='[goal_follow] t=12s: Starting Robot 1 TF republisher …'),
+            Node(
+                package='autonomy_bringup',
+                executable='robot1_tf_republisher',
+                name='robot1_tf_republisher',
+                output='screen',
+                parameters=[{
+                    # Must match the Gazebo spawn pose so map→robot1/odom
+                    # places Robot 1 at the correct world position in RViz.
+                    'robot1_initial_x':   LaunchConfiguration('robot1_x'),
+                    'robot1_initial_y':   LaunchConfiguration('robot1_y'),
+                    'robot1_initial_yaw': LaunchConfiguration('robot1_yaw'),
+                }],
+            ),
+        ]
+    )
+
     # ------------------------------------------------- SLAM for Robot 2 (leader)
     # setup_path=ROBOT2_PATH → reads robot2/robot.yaml (namespace a300_00001)
     # → subscribes to /a300_00001/sensors/lidar2d_0/scan
@@ -240,9 +264,60 @@ def generate_launch_description():
         ]
     )
 
+    # ------------------------------- ArUco Kalman tracker (smooths + predicts pose)
+    # Sits between the raw detector and the follower.  During gaps in detection it
+    # continues to publish a forward-rolled predicted pose so the follower doesn't
+    # stop unnecessarily.  Only stops publishing when status = "lost".
+    aruco_tracker = TimerAction(
+        period=13.0,
+        actions=[
+            LogInfo(msg='[goal_follow] t=13s: Starting ArUco Kalman tracker + camera optical TF …'),
+            # Static TF: camera_0_link → camera_0_color_optical_frame
+            # Required because the Clearpath D435 URDF skips optical frames by default.
+            Node(
+                package='tf2_ros',
+                executable='static_transform_publisher',
+                name='camera_0_optical_tf',
+                namespace='a300_00000',
+                output='screen',
+                arguments=[
+                    '--frame-id', 'camera_0_link',
+                    '--child-frame-id', 'camera_0_color_optical_frame',
+                    '--x', '0', '--y', '0', '--z', '0',
+                    '--qx', '-0.5', '--qy', '0.5', '--qz', '-0.5', '--qw', '0.5',
+                ],
+                remappings=[('/tf_static', '/a300_00000/tf_static')],
+                parameters=[{'use_sim_time': LaunchConfiguration('use_sim_time')}],
+                condition=IfCondition(LaunchConfiguration('launch_aruco_follower')),
+            ),
+            Node(
+                package='autonomy_bringup',
+                executable='aruco_tracker',
+                name='aruco_tracker',
+                namespace='a300_00000',
+                output='screen',
+                parameters=[{
+                    'use_sim_time':          LaunchConfiguration('use_sim_time'),
+                    'input_topic':           '/a300_00000/aruco_detector/target_pose',
+                    'fresh_threshold_s':     2.0,
+                    'prediction_timeout_s':  4.0,
+                    'prediction_horizon_s':  1.5,
+                }],
+                # tf2_ros uses absolute /tf and /tf_static regardless of namespace.
+                # Remap to the namespaced topics where Robot 1's TF tree lives.
+                remappings=[
+                    ('/tf',        '/a300_00000/tf'),
+                    ('/tf_static', '/a300_00000/tf_static'),
+                ],
+                condition=IfCondition(LaunchConfiguration('launch_aruco_follower')),
+            ),
+        ]
+    )
+
     # ------------------------------- ArUco follower (drives Robot 1 toward Robot 2)
-    # Publishes TwistStamped to /a300_00000/cmd_vel — same as existing working demo.
-    # No TF lookups needed; works purely from camera relative pose.
+    # Now consumes the tracker's smoothed/predicted pose instead of raw detector output.
+    # During detection gaps the tracker keeps feeding poses, so the follower doesn't stop.
+    # Recovery only triggers once the tracker declares "lost" and stops publishing.
     aruco_follower = TimerAction(
         period=16.0,
         actions=[
@@ -254,11 +329,27 @@ def generate_launch_description():
                 namespace='a300_00000',
                 output='screen',
                 parameters=[{
-                    'use_sim_time':       LaunchConfiguration('use_sim_time'),
-                    'target_pose_topic':  '/a300_00000/aruco_detector/target_pose',
-                    'cmd_vel_topic':      '/a300_00000/cmd_vel',
-                    'desired_standoff_m': LaunchConfiguration('follower_desired_standoff_m'),
-                    'target_timeout_s':   LaunchConfiguration('follower_target_timeout_s'),
+                    'use_sim_time':                     LaunchConfiguration('use_sim_time'),
+                    'target_pose_topic':                '/a300_00000/aruco_tracker/tracked_pose',
+                    'tracker_status_topic':             '/a300_00000/aruco_tracker/status',
+                    'predicted_path_topic':             '/a300_00000/aruco_tracker/predicted_path',
+                    'prediction_horizon_s':             1.5,
+                    'cmd_vel_topic':                    '/a300_00000/cmd_vel',
+                    'desired_standoff_m':               LaunchConfiguration('follower_desired_standoff_m'),
+                    'target_timeout_s':                 LaunchConfiguration('follower_target_timeout_s'),
+                    # Gains tuned for ~1 Hz Gazebo camera
+                    'angular_kp':                       1.0,
+                    'max_angular_speed':                0.5,
+                    'lateral_deadband_m':               0.10,
+                    'align_before_drive_m':             0.60,
+                    'max_linear_speed':                 0.35,
+                    # Recovery: creep forward + gentle scan, no spinning
+                    'lost_target_recovery_s':           3.0,
+                    'recovery_linear_speed':            0.12,
+                    'recovery_angular_speed':           0.20,
+                    # KF-predicted mode: scale back speed and relax deadbands
+                    'predicted_speed_scale':            0.60,
+                    'predicted_lateral_deadband_scale': 2.0,
                 }],
                 condition=IfCondition(LaunchConfiguration('launch_aruco_follower')),
             ),
@@ -381,9 +472,9 @@ def generate_launch_description():
 
     # ----------------------------------------------------------------- RViz
     # Remapped to Robot 2's TF (leader) — has the map frame from SLAM.
-    # NOTE: Robot 1 (follower) shares the same non-namespaced frame names
-    # (base_link, lidar2d_0_link, …) as Robot 2, so it CANNOT be shown in
-    # the same RViz window without a TF bridge.  Only Robot 2 is displayed.
+    # Robot 1 frames arrive via robot1_tf_republisher with "robot1/" prefix
+    # (robot1/base_link, robot1/odom, …) so they coexist in the same TF tree
+    # without frame-name collisions.  The dual_robot.rviz config shows both.
     rviz = TimerAction(
         period=16.0,
         actions=[
@@ -421,8 +512,10 @@ def generate_launch_description():
     ld.add_action(LogInfo(msg='[goal_follow] Robot 2 (a300_00001) will start at t=8s …'))
     ld.add_action(robot2_launch)
 
+    ld.add_action(robot1_tf_bridge)
     ld.add_action(slam)
     ld.add_action(aruco_detector)
+    ld.add_action(aruco_tracker)
     ld.add_action(aruco_follower)
     ld.add_action(autonomy_stack)
     ld.add_action(compare_plot)

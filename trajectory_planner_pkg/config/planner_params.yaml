@@ -22,15 +22,15 @@ trajectory_planner:
     global_frame: "map"
 
     # ── Map processing ────────────────────────────────────────────────────────
-    inflation_radius_m: 0.65       # obstacle inflation (robot half-width ~0.33m + 0.32m safety; must be > obstacle_stop_dist)
+    inflation_radius_m: 0.50       # obstacle inflation (robot half-width ~0.33m + modest safety; must be > obstacle_stop_dist)
     occupied_threshold: 85         # ≥85 → obstacle (SLAM noise is 65-80, real obstacles = 100)
     allow_unknown: true            # treat unknown cells (-1) as free.
                                    # Must be true during active SLAM — at startup nearly the entire
                                    # map is unknown and allow_unknown=false would block all planning.
                                    # Physical obstacles in unknown areas are caught by the lidar stop
-                                   # in path_follower (obstacle_stop_dist=0.50m) rather than the planner.
-    clearance_bias_dist_m: 0.30    # soft preferred clearance beyond the inflated obstacle boundary
-    clearance_bias_weight: 1.0     # cost penalty for hugging inflated obstacles; higher = wider detours
+                                   # in path_follower (obstacle_stop_dist=0.40m) rather than the planner.
+    clearance_bias_dist_m: 0.10    # small soft preferred clearance beyond the inflated obstacle boundary
+    clearance_bias_weight: 0.35    # keep maze corridors viable while still preferring some wall clearance
     replan_clearance_scale: 2.0    # repeated same-goal replans bias harder away from obstacle boundaries
     replan_goal_repeat_s: 10.0     # same goal within this window is treated as a replan for clearance bias
     replan_goal_tolerance_m: 0.20  # how close two goals must be to count as the same replan target
