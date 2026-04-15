@@ -12,17 +12,35 @@ source install/setup.bash
 
 ---
 
-## Two-Robot ArUco Follow Demo (Canonical)
+## Integrated Goal-Pose + ArUco Follow Demo (Recommended)
 
-One robot follows another using ArUco marker detection with full obstacle-aware recovery navigation.
+Robot 2 navigates to clicked RViz goals while Robot 1 trails behind using ArUco marker detection with obstacle-aware recovery navigation.
+
+```bash
+ros2 launch autonomy_bringup two_robot_goal_follow.launch.py
+```
+
+**Role assignment:**
+- **Robot 2 (`a300_00001`) = LEADER** — receives `2D Goal Pose`, runs the custom planner + path follower, marker on rear bumper
+- **Robot 1 (`a300_00000`) = FOLLOWER** — camera detects the marker, follows with visual servo, falls back to obstacle-aware A* path planning when the marker is lost
+
+**Workflow:**
+
+1. Launch the integrated demo and wait about 20 seconds for both robots and SLAM to come up.
+2. In RViz, click **2D Goal Pose** to command Robot 2.
+3. Robot 1 follows automatically once the marker is visible.
+
+Detailed setup notes and troubleshooting live in [docs/MULTI_ROBOT_SETUP.md](docs/MULTI_ROBOT_SETUP.md).
+
+---
+
+## Two-Robot ArUco Follow Demo (Manual Leader Control)
+
+Same physical setup as the integrated demo, but you drive the leader manually while the follower uses the visual-servo + planned-recovery stack.
 
 ```bash
 ros2 launch autonomy_bringup two_robot_aruco.launch.py
 ```
-
-**Role assignment:**
-- **Robot 2 (`a300_00001`) = LEADER** — drive with teleop; ArUco marker on rear bumper
-- **Robot 1 (`a300_00000`) = FOLLOWER** — camera detects marker, follows with visual servo; falls back to obstacle-aware A* path planning when marker is lost
 
 **Startup timeline:**
 
@@ -61,20 +79,6 @@ ros2 launch autonomy_bringup two_robot_aruco.launch.py \
     follower_desired_standoff_m:=2.0 \
     nav_timeout_s:=45.0
 ```
-
----
-
-## Integrated Goal-Pose + ArUco Follow Demo
-
-Robot 2 navigates to clicked goals while Robot 1 trails behind.
-
-```bash
-ros2 launch autonomy_bringup two_robot_goal_follow.launch.py
-```
-
-1. Open RViz (auto-launched).
-2. Click **2D Goal Pose** — Robot 2 plans and drives there.
-3. Robot 1 follows automatically once the ArUco marker is visible.
 
 ---
 

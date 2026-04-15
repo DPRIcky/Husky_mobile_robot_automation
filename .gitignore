@@ -43,6 +43,7 @@ devel_isolated/
 # IDE
 .vscode/
 .idea/
+.codex
 *.swp
 *.swo
 *~
