@@ -26,7 +26,7 @@ logs/
 build/
 install/
 log/
-bin/
+/bin/
 msg_gen/
 srv_gen/
 msg/*Action.msg
